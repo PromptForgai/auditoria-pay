@@ -2,6 +2,11 @@ name = "auditoria-pay"
 main = "index.js"
 compatibility_date = "2024-09-01"
 
+# Le site (index.html, activated.html) est servi par ce même Worker depuis le dossier public/ :
+# même domaine que l'API, donc cookies de session et appels /auth, /upload... fonctionnent sans CORS.
+[assets]
+directory = "./public"
+
 [[d1_databases]]
 binding = "AUDITORIA_DB"
 database_name = "auditoria_db"
