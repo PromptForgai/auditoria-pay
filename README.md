@@ -16,8 +16,8 @@ wrangler r2 bucket create auditoria-documents
 
 wrangler d1 execute auditoria_db --file=schema.sql
 
-wrangler secret put ANTHROPIC_API_KEY
-# coller ta clé API Anthropic
+wrangler secret put GEMINI_API_KEY
+# clé Gemini gratuite (aucune carte bancaire requise) : aistudio.google.com → "Get API key"
 
 wrangler secret put RESEND_API_KEY
 # (ou un autre fournisseur d'email — adapte sendResetEmail() dans index.js)
@@ -75,7 +75,7 @@ mêmes bindings D1/R2, mêmes routes `/create-invoice` et `/status` à côté de
 
 ## Ce qui est réel dès maintenant
 
-- Extraction : Claude lit chaque PDF/CSV et renvoie des champs factuels (montants, IBAN, dates,
+- Extraction : Gemini (gratuit, sans carte bancaire) lit chaque PDF/CSV et renvoie des champs factuels (montants, IBAN, dates,
   numéros de facture/BC), jamais un jugement — c'est le moteur de règles qui compare.
 - Détection : 4 règles déterministes et vérifiables (`src/rules.js`) —
   écart facture/BC, doublon de paiement, échéance de contrat, sortie vers IBAN inconnu.
@@ -165,10 +165,29 @@ vrai compte à rebours (mm:ss) et bascule automatiquement vers le plan gratuit (
 les 15 minutes écoulées. Les anciens boutons "Book a demo" ouvrent maintenant directement
 l'inscription.
 
+## Extraction IA : Gemini plutôt que Claude (vrai tier gratuit)
+
+`src/extraction.js` appelle l'API **Gemini** (Google AI Studio), pas Claude — c'est le seul des
+grands fournisseurs à offrir un tier gratuit récurrent sans carte bancaire, plutôt qu'un simple
+crédit d'essai qui expire. Concrètement :
+- Clé : **aistudio.google.com** → *Get API key* → aucune carte requise pour le tier gratuit.
+- Modèle utilisé : `gemini-2.5-flash` (marqué gratuit sur la page de pricing Google au moment de
+  l'écriture) — vérifie sur `ai.google.dev/gemini-api/docs/pricing` que c'est toujours le cas, la
+  liste des modèles gratuits change avec le temps.
+- Limite réelle à connaître : le tier gratuit est **limité en débit** (quelques requêtes par
+  minute selon le modèle et le compte), pas juste en volume. Pour un usage en dessous de quelques
+  dizaines d'analyses par jour, ça passe largement ; si un client dépose 50 fichiers d'un coup,
+  certaines requêtes pourront être temporairement rejetées (erreur 429) — `/extract` renverra
+  alors une erreur explicite, à réessayer quelques secondes plus tard.
+- Les entrées/sorties du tier gratuit peuvent être utilisées par Google pour améliorer ses
+  modèles (contrairement au tier payant) — à mentionner à tes clients si la confidentialité des
+  documents financiers est un argument de vente, ou à activer la facturation dès que le budget
+  le permet pour lever cette limite.
+
 ## Ce qui reste ouvert
 
 - Import CSV bancaire multi-formats (chaque banque a son propre format d'export — aujourd'hui le
-  CSV est envoyé tel quel à Claude pour extraction, ce qui marche mais reste à valider sur de
+  CSV est envoyé tel quel à Gemini pour extraction, ce qui marche mais reste à valider sur de
   vrais relevés)
 - Connexion Open Banking (Bridge, Powens...) si tu veux une vraie trésorerie en direct plutôt que
   le flux cumulé décrit ci-dessus

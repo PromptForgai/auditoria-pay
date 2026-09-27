@@ -216,7 +216,7 @@ export default {
           ? { pdfBase64: btoa(String.fromCharCode(...new Uint8Array(await obj.arrayBuffer()))) }
           : { text: await obj.text() }; // CSV/texte lu directement
 
-        const fields = await extractDocument(doc.kind, input, env.ANTHROPIC_API_KEY);
+        const fields = await extractDocument(doc.kind, input, env.GEMINI_API_KEY);
 
         await env.AUDITORIA_DB.prepare(
           `INSERT INTO extractions (document_id, kind, data_json) VALUES (?,?,?)`

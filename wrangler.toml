@@ -12,7 +12,7 @@ binding = "AUDITORIA_BUCKET"
 bucket_name = "auditoria-documents"        # `wrangler r2 bucket create auditoria-documents`
 
 # Secrets, ne pas mettre en clair ici :
-# wrangler secret put ANTHROPIC_API_KEY
+# wrangler secret put GEMINI_API_KEY
 # wrangler secret put NOWPAYMENTS_API_KEY
 # wrangler secret put IPN_SECRET
 # (RESEND_API_KEY optionnel, pour l'email de réinitialisation de mot de passe)
