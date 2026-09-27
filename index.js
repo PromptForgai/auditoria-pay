@@ -18,6 +18,22 @@ function json(data, status = 200, extraHeaders = {}) {
   });
 }
 
+// Encode par blocs de 8ko : String.fromCharCode(...bigArray) plante sur les gros fichiers
+// (dépassement de la pile d'appel avec l'opérateur spread sur un grand tableau).
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToText(base64) {
+  return new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
+}
+
 // Envoi d'email — branche un vrai fournisseur (Resend, Postmark...) avant la prod.
 // Sans clé configurée, le lien est juste loggé (utile en dev, jamais suffisant en prod).
 async function sendResetEmail(env, toEmail, token) {
@@ -187,13 +203,15 @@ export default {
         const kind = form.get('kind'); // invoice | purchase_order | contract | bank_statement
         if (!file || !kind) return json({ error: 'file et kind requis' }, 400);
 
+        // Stockage direct en D1 (pas de R2 : R2 exige une carte bancaire/PayPal pour être activé,
+        // même en restant sous le tier gratuit — D1 n'a pas cette exigence). Limite pratique :
+        // pas adapté à de très gros fichiers/volumes, à revoir si R2 devient disponible plus tard.
         const documentId = crypto.randomUUID();
-        const r2Key = `${userId}/${documentId}-${file.name}`;
-        await env.AUDITORIA_BUCKET.put(r2Key, await file.arrayBuffer());
+        const contentBase64 = arrayBufferToBase64(await file.arrayBuffer());
 
         await env.AUDITORIA_DB.prepare(
-          `INSERT INTO documents (id, user_id, kind, r2_key, filename, status, uploaded_at) VALUES (?,?,?,?,?,?,?)`
-        ).bind(documentId, userId, kind, r2Key, file.name, 'uploaded', Date.now()).run();
+          `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at) VALUES (?,?,?,?,?,?,?)`
+        ).bind(documentId, userId, kind, contentBase64, file.name, 'uploaded', Date.now()).run();
 
         return json({ document_id: documentId, status: 'uploaded' });
       }
@@ -208,13 +226,10 @@ export default {
         ).bind(documentId, userId).first();
         if (!doc) return json({ error: 'document introuvable' }, 404);
 
-        const obj = await env.AUDITORIA_BUCKET.get(doc.r2_key);
-        if (!obj) return json({ error: 'fichier introuvable dans R2' }, 404);
-
         const isPdf = doc.filename?.toLowerCase().endsWith('.pdf');
         const input = isPdf
-          ? { pdfBase64: btoa(String.fromCharCode(...new Uint8Array(await obj.arrayBuffer()))) }
-          : { text: await obj.text() }; // CSV/texte lu directement
+          ? { pdfBase64: doc.content_base64 }
+          : { text: base64ToText(doc.content_base64) }; // CSV/texte
 
         const fields = await extractDocument(doc.kind, input, env.GEMINI_API_KEY);
 

@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY,              -- uuid
   user_id TEXT NOT NULL,
   kind TEXT NOT NULL,               -- 'invoice' | 'purchase_order' | 'contract' | 'bank_statement'
-  r2_key TEXT NOT NULL,             -- chemin du fichier brut dans R2
+  content_base64 TEXT NOT NULL,     -- contenu brut du fichier, encodé en base64, stocké directement en D1
+                                     -- (pas de R2 pour l'instant : R2 exige carte bancaire/PayPal, D1 non)
   filename TEXT,
   status TEXT NOT NULL DEFAULT 'uploaded', -- uploaded | extracted | error
   uploaded_at INTEGER NOT NULL,

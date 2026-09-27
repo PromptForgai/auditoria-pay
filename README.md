@@ -184,6 +184,20 @@ crédit d'essai qui expire. Concrètement :
   documents financiers est un argument de vente, ou à activer la facturation dès que le budget
   le permet pour lever cette limite.
 
+## Stockage des fichiers : D1 plutôt que R2 (pas de carte bancaire nécessaire)
+
+Activer R2 chez Cloudflare exige de renseigner une carte bancaire ou un compte PayPal, même pour
+rester à 0€ (mesure anti-abus de Cloudflare). Ce n'est pas le cas de D1. En attendant d'avoir un
+moyen de paiement, les fichiers sont donc stockés **directement en base D1**, dans
+`documents.content_base64` — pas de bucket R2 à créer, pas de binding `AUDITORIA_BUCKET`.
+
+Limites à connaître :
+- Ne convient pas à de très gros fichiers ou très gros volumes (D1 a une limite de taille par
+  base) — suffisant pour démarrer avec des factures/contrats de quelques pages.
+- Le jour où tu as une carte (même virtuelle/prépayée) ou un compte PayPal : crée le bucket R2,
+  décommente le binding dans `wrangler.toml`, et redemande-moi de rebrancher le code dessus pour
+  les nouveaux documents (pas besoin de migrer les anciens, D1 continue de fonctionner).
+
 ## Ce qui reste ouvert
 
 - Import CSV bancaire multi-formats (chaque banque a son propre format d'export — aujourd'hui le

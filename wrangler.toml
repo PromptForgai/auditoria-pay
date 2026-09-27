@@ -7,9 +7,12 @@ binding = "AUDITORIA_DB"
 database_name = "auditoria_db"
 database_id = "REMPLACE_PAR_TON_ID"        # `wrangler d1 create auditoria_db`
 
-[[r2_buckets]]
-binding = "AUDITORIA_BUCKET"
-bucket_name = "auditoria-documents"        # `wrangler r2 bucket create auditoria-documents`
+# R2 désactivé pour l'instant : son activation exige une carte bancaire/PayPal chez Cloudflare,
+# même pour rester dans le tier gratuit. Les fichiers sont stockés directement en D1 en attendant
+# (colonne documents.content_base64). Pour réactiver R2 plus tard :
+# [[r2_buckets]]
+# binding = "AUDITORIA_BUCKET"
+# bucket_name = "auditoria-documents"        # `wrangler r2 bucket create auditoria-documents`
 
 # Secrets, ne pas mettre en clair ici :
 # wrangler secret put GEMINI_API_KEY
