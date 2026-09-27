@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AuditorIA — AI Financial Audit & Accounting Software for SMEs</title>
+<meta name="description" content="AuditorIA detects billing gaps, contract risks and treasury anomalies. Average client finds $12,430 in discrepancies per year. ROI in under 30 days.">
+<meta name="keywords" content="financial audit software, accounting software SME, AI financial analysis, anomaly detection finance, treasury management, contract management software, billing discrepancy detection, cash flow monitoring, corporate finance dashboard">
+<meta name="robots" content="index, follow">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#050a0f;--bg2:#0a1219;--card:#0d171f;--card2:#111c26;--border:#1a2d3a;--text:#e8f0f5;--muted:#8ba3b5;--em:#10b981;--emd:#059669;--egl:#34d399;--eg:rgba(16,185,129,.12);--red:#f87171;--amber:#fbbf24;--blue:#38bdf8;--sw:240px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:10px;font-weight:600;font-size:.9rem;border:none;cursor:pointer;transition:.2s}
+.btn-primary{background:linear-gradient(135deg,var(--em),var(--emd));color:#fff;box-shadow:0 4px 20px rgba(16,185,129,.25)}.btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}.btn-outline:hover{border-color:var(--em);color:var(--em)}
+.btn-lg{padding:15px 28px;font-size:1rem}
+.btn-sm{padding:8px 14px;font-size:.8rem}
+.lang-select{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px;font-size:.85rem;cursor:pointer}
+
+.public-nav{position:fixed;top:0;left:0;right:0;z-index:100;height:68px;display:flex;align-items:center;justify-content:space-between;padding:0 40px;background:rgba(5,10,15,.9);backdrop-filter:blur(16px);border-bottom:1px solid var(--border)}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.15rem}
+.nav-logo .icon{width:36px;height:36px;background:linear-gradient(135deg,var(--em),#047857);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.nav-logo span{color:var(--em)}
+.nav-links{display:flex;align-items:center;gap:28px}
+.nav-links a{color:var(--muted);font-weight:500;font-size:.92rem}.nav-links a:hover{color:var(--text)}
+.nav-actions{display:flex;align-items:center;gap:12px}
+
+.landing{padding-top:68px}
+.hero{padding:88px 40px 72px;text-align:center;background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(16,185,129,.15),transparent 60%),var(--bg)}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;background:var(--eg);border:1px solid rgba(16,185,129,.35);color:var(--egl);padding:7px 16px;border-radius:24px;font-size:.8rem;font-weight:600;margin-bottom:28px}
+.hero h1{font-size:clamp(2.1rem,5vw,3.4rem);font-weight:800;letter-spacing:-.03em;line-height:1.12;max-width:820px;margin:0 auto 18px}
+.hero h1 span{background:linear-gradient(135deg,var(--egl),var(--em));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-proof{font-size:1.05rem;color:var(--egl);font-weight:600;margin-bottom:14px}
+.hero p{font-size:1.12rem;color:var(--muted);max-width:560px;margin:0 auto 32px;line-height:1.65}
+.hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.trust-row{display:flex;justify-content:center;gap:28px;flex-wrap:wrap;margin-top:48px;padding-top:32px;border-top:1px solid var(--border)}
+.trust-item{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.85rem}
+
+.section{padding:72px 40px;max-width:1120px;margin:0 auto}
+.section-title{font-size:1.85rem;font-weight:700;text-align:center;margin-bottom:10px}
+.section-sub{color:var(--muted);text-align:center;margin-bottom:48px;font-size:1.05rem;max-width:560px;margin-left:auto;margin-right:auto}
+.features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.feature-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:26px;transition:border-color .2s,transform .2s}
+.feature-card:hover{border-color:rgba(16,185,129,.4);transform:translateY(-2px)}
+.feature-icon{width:46px;height:46px;border-radius:12px;background:var(--eg);color:var(--em);display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:1.25rem}
+.feature-card h3{font-size:1.05rem;margin-bottom:8px}
+.feature-card p{color:var(--muted);font-size:.9rem;line-height:1.55}
+
+.pricing-section{background:var(--bg2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.pricing-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px;max-width:880px;margin:0 auto}
+.price-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:32px;position:relative}
+.price-card.featured{border-color:var(--em);box-shadow:0 0 0 1px var(--em),0 24px 48px rgba(16,185,129,.12)}
+.price-card.featured::before{content:attr(data-badge);position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,var(--em),var(--emd));color:#fff;font-size:.72rem;font-weight:700;padding:5px 14px;border-radius:20px;letter-spacing:.02em}
+.price-name{font-size:1.05rem;font-weight:600;margin-bottom:6px;color:var(--muted)}
+.price-amount{font-size:2.6rem;font-weight:800;letter-spacing:-.03em}
+.price-amount span{font-size:1rem;font-weight:500;color:var(--muted)}
+.price-desc{color:var(--muted);font-size:.9rem;margin:12px 0 20px;line-height:1.5}
+.price-features{list-style:none;margin-bottom:24px}
+.price-features li{padding:8px 0;font-size:.9rem;display:flex;align-items:flex-start;gap:10px;color:var(--muted)}
+.price-features li::before{content:"✓";color:var(--em);font-weight:700;flex-shrink:0}
+.pay-note{font-size:.8rem;color:var(--muted);text-align:center;margin-top:12px;line-height:1.45}
+
+.security-section{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
+.security-section h2{font-size:1.6rem;margin-bottom:14px}
+.security-section p{color:var(--muted);line-height:1.6;margin-bottom:10px}
+.security-list{list-style:none;margin-top:18px}
+.security-list li{padding:9px 0;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:.95rem}
+footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border-top:1px solid var(--border)}
+
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;z-index:200;padding:20px}
+.modal-overlay.open{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:36px;max-width:420px;width:100%}
+.modal h3{margin-bottom:6px;font-size:1.25rem}
+.modal .sub{color:var(--muted);font-size:.9rem;margin-bottom:22px;line-height:1.5}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:.82rem;font-weight:500;margin-bottom:6px;color:var(--muted)}
+.form-group input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.95rem;outline:none}
+.form-group input:focus{border-color:var(--em)}
+
+.app{display:none;min-height:100vh}.app.visible{display:flex}
+.landing.hidden,.public-nav.hidden{display:none}
+.sidebar{width:var(--sw);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:100}
+.sidebar-header{padding:22px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.logo-icon{width:38px;height:38px;background:linear-gradient(135deg,var(--em),#047857);border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:1.15rem}
+.logo-text{font-weight:700;font-size:1.15rem}.logo-text span{color:var(--em)}
+.logo-sub{font-size:.65rem;color:var(--muted);font-weight:500;letter-spacing:.04em;margin-top:2px}
+.nav{flex:1;padding:16px 10px;display:flex;flex-direction:column;gap:3px;overflow-y:auto}
+.nav-label{font-size:.65rem;font-weight:600;color:var(--muted);letter-spacing:.08em;padding:12px 14px 6px;text-transform:uppercase}
+.nav-item{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;color:var(--muted);font-weight:500;font-size:.9rem;cursor:pointer;border:none;background:none;width:100%;text-align:left;transition:.15s}
+.nav-item:hover{background:rgba(255,255,255,.04);color:var(--text)}.nav-item.active{background:linear-gradient(90deg,rgba(16,185,129,.2),transparent);color:var(--egl);border-left:3px solid var(--em);padding-left:11px}
+.nav-item svg{width:18px;height:18px;flex-shrink:0}
+.badge-count{margin-left:auto;background:var(--em);color:#fff;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px}
+.sidebar-footer{padding:14px;border-top:1px solid var(--border)}
+.user-chip{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:rgba(255,255,255,.03)}
+.user-av{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#334155,#1e293b);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;color:var(--egl)}
+.user-name{font-size:.85rem;font-weight:600}.user-role{font-size:.7rem;color:var(--muted)}
+
+.main{margin-left:var(--sw);flex:1;min-height:100vh;display:flex;flex-direction:column}
+.topbar{height:64px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:rgba(5,10,15,.85);backdrop-filter:blur(12px);position:sticky;top:0;z-index:50}
+.topbar-title{font-weight:600;font-size:1.05rem}
+.topbar-sub{font-size:.75rem;color:var(--muted);font-weight:400}
+.topbar-actions{display:flex;align-items:center;gap:10px}
+.content{padding:24px 28px;flex:1}
+.page{display:none}.page.active{display:block}
+
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+.stat-card{background:linear-gradient(160deg,var(--card2),var(--card));border:1px solid var(--border);border-radius:16px;padding:20px;position:relative;overflow:hidden}
+.stat-card::after{content:"";position:absolute;top:0;right:0;width:80px;height:80px;background:radial-gradient(circle,rgba(16,185,129,.08),transparent 70%)}
+.stat-label{font-size:.78rem;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.stat-value{font-size:1.55rem;font-weight:800;letter-spacing:-.03em}
+.stat-change{font-size:.75rem;margin-top:8px;display:flex;align-items:center;gap:4px}.stat-change.up{color:var(--egl)}.stat-change.down{color:var(--red)}
+
+.charts-row{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:22px}
+.chart-card h3{font-size:.95rem;font-weight:600;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
+.chart-container{position:relative;height:240px}
+.alerts-box{display:flex;flex-direction:column;gap:10px;max-height:280px;overflow-y:auto}
+.alert-item{background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;gap:12px;align-items:flex-start}
+.alert-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem}
+.alert-icon.critical{background:rgba(248,113,113,.12);color:var(--red)}
+.alert-icon.warning{background:rgba(251,191,36,.12);color:var(--amber)}
+.alert-icon.info{background:rgba(56,189,248,.12);color:var(--blue)}
+.alert-title{font-weight:600;font-size:.88rem;margin-bottom:3px}
+.alert-desc{font-size:.78rem;color:var(--muted);line-height:1.4}
+.alert-meta{font-size:.7rem;color:var(--muted);margin-top:6px}
+.alert-btn{margin-left:auto;flex-shrink:0}
+
+.sub-banner{border-radius:12px;padding:12px 16px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:.88rem;border:1px solid}
+.sub-banner.free{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.3);color:var(--amber)}
+.sub-banner.ok{background:var(--eg);border-color:rgba(16,185,129,.3);color:var(--egl)}
+.sub-banner.expired{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.3);color:var(--red)}
+
+.upload-zone{border:2px dashed var(--border);border-radius:16px;padding:40px 20px;text-align:center;background:rgba(16,185,129,.03);cursor:pointer;transition:.2s}
+.upload-zone:hover{border-color:var(--em);background:var(--eg)}
+.upload-zone h3{font-size:1rem;margin:12px 0 6px}
+.upload-zone p{color:var(--muted);font-size:.85rem}
+
+.contracts-table{width:100%;border-collapse:collapse;margin-top:18px}
+.contracts-table th,.contracts-table td{padding:13px 14px;text-align:left;border-bottom:1px solid var(--border);font-size:.88rem}
+.contracts-table th{color:var(--muted);font-weight:500;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.68rem;font-weight:600}
+.badge-critical{background:rgba(248,113,113,.15);color:var(--red)}
+.badge-warning{background:rgba(251,191,36,.15);color:var(--amber)}
+.badge-info{background:rgba(56,189,248,.15);color:var(--blue)}
+
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--em);border-radius:12px;padding:14px 18px;box-shadow:0 12px 40px rgba(0,0,0,.5);z-index:300;display:none;align-items:center;gap:12px;max-width:340px}
+.toast.show{display:flex}
+.menu-toggle{display:none;background:none;border:none;color:var(--text);font-size:1.4rem;cursor:pointer}
+
+@media(max-width:1000px){.features-grid,.pricing-grid,.security-section,.charts-row{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.public-nav{padding:0 16px}.nav-links{display:none}.hero{padding:56px 20px}.section{padding:48px 20px}.content{padding:16px}}
+@media(max-width:768px){.sidebar{transform:translateX(-100%);transition:transform .25s}.sidebar.open{transform:translateX(0)}.main{margin-left:0}.menu-toggle{display:block}.stats-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<nav class="public-nav" id="publicNav">
+  <div class="nav-logo"><div class="icon">🛡️</div>Auditor<span>IA</span></div>
+  <div class="nav-links">
+    <a href="#features" data-i18n="nav_features">Features</a>
+    <a href="#pricing" data-i18n="nav_pricing">Pricing</a>
+    <a href="#security" data-i18n="nav_security">Security</a>
+  </div>
+  <div class="nav-actions">
+    <select class="lang-select" id="langSelect" onchange="setLang(this.value)"><option value="en">EN</option><option value="fr">FR</option></select>
+    <button class="btn btn-outline" onclick="openLogin()" data-i18n="login">Log in</button>
+    <button class="btn btn-primary" onclick="openSignup()" data-i18n="book_demo">Book a 15-min Demo</button>
+  </div>
+</nav>
+
+<div class="landing" id="landing">
+  <section class="hero">
+    <div class="hero-badge">● <span data-i18n="hero_badge">AI-powered financial intelligence</span></div>
+    <h1 data-i18n="hero_title">Detect financial anomalies<br><span>before they cost you</span></h1>
+    <div class="hero-proof" data-i18n="hero_proof">Clients detect on average $12,430 in gaps per year. ROI in 11 days.</div>
+    <p data-i18n="hero_sub">AuditorIA monitors contracts, bank flows and invoices in real time. Automatic alerts, savings detection, bank-grade security — built for finance teams who cannot afford amateur tools.</p>
+    <div class="hero-cta">
+      <button class="btn btn-primary btn-lg" onclick="openSignup()" data-i18n="cta_demo">Book a 15-min Demo</button>
+      <button class="btn btn-outline btn-lg" onclick="document.getElementById('pricing').scrollIntoView({behavior:'smooth'})" data-i18n="cta_pricing">View pricing</button>
+    </div>
+    <div class="trust-row">
+      <div class="trust-item">🔒 <span data-i18n="trust_aes">AES-256 encryption</span></div>
+      <div class="trust-item">✓ <span data-i18n="trust_gdpr">GDPR compliant</span></div>
+      <div class="trust-item">🇪🇺 <span data-i18n="trust_eu">EU hosting</span></div>
+      <div class="trust-item">📄 <span data-i18n="trust_invoice">Invoice available</span></div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <h2 class="section-title" data-i18n="features_title">Built for finance directors</h2>
+    <p class="section-sub" data-i18n="features_sub">Real-time monitoring, automatic anomaly detection, secure contract management.</p>
+    <div class="features-grid">
+      <div class="feature-card"><div class="feature-icon">📊</div><h3 data-i18n="feat1_t">Treasury dashboard</h3><p data-i18n="feat1_d">Live view of cash, inflows and outflows. Spot trends before they become problems.</p></div>
+      <div class="feature-card"><div class="feature-icon">📄</div><h3 data-i18n="feat2_t">Contract tracking</h3><p data-i18n="feat2_d">Upload PDFs securely. Automatic expiry alerts and renegotiation signals.</p></div>
+      <div class="feature-card"><div class="feature-icon">⚡</div><h3 data-i18n="feat3_t">AI anomaly detection</h3><p data-i18n="feat3_d">Billing gaps, double payments, unusual transfers — detected continuously.</p></div>
+      <div class="feature-card"><div class="feature-icon">💰</div><h3 data-i18n="feat4_t">Savings detection</h3><p data-i18n="feat4_d">Find overcharges and better rates across vendor contracts automatically.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔒</div><h3 data-i18n="feat5_t">Bank-grade security</h3><p data-i18n="feat5_d">AES-256, GDPR, EU hosting. Your data never leaves secured infrastructure.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔔</div><h3 data-i18n="feat6_t">Real-time alerts</h3><p data-i18n="feat6_d">Critical and warning alerts as soon as anomalies are found.</p></div>
+    </div>
+  </section>
+
+  <section class="pricing-section" id="pricing">
+    <div class="section">
+      <h2 class="section-title" data-i18n="pricing_title">ROI in less than 30 days. Cancel anytime.</h2>
+      <p class="section-sub" data-i18n="pricing_sub">Enterprise plans for SMEs that need control over contracts and cash.</p>
+      <div class="pricing-grid">
+        <div class="price-card">
+          <div class="price-name">Starter</div>
+          <div class="price-amount">$2,000 <span data-i18n="per_month">/ month</span></div>
+          <div class="price-desc" data-i18n="starter_desc">Small SME — up to 50 tracked contracts</div>
+          <ul class="price-features">
+            <li data-i18n="f1">Up to 50 contracts</li>
+            <li data-i18n="f2">Automatic expiry alerts</li>
+            <li data-i18n="f3">Treasury dashboard</li>
+            <li data-i18n="f4">Secure document deposit</li>
+            <li data-i18n="f5">Priority email support</li>
+            <li data-i18n="f6">GDPR & encryption</li>
+          </ul>
+          <button class="btn btn-outline" style="width:100%" onclick="openSignup()" data-i18n="book_demo">Book a 15-min Demo</button>
+          <button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="openCrypto('starter')" data-i18n="subscribe">Subscribe</button>
+          <p class="pay-note" data-i18n="pay_note">Payment by bank transfer or crypto (USDT TRC20 / BTC / ETH). Invoice available.</p>
+        </div>
+        <div class="price-card featured" data-badge="Recommended">
+          <div class="price-name">Growth</div>
+          <div class="price-amount">$5,000 <span data-i18n="per_month">/ month</span></div>
+          <div class="price-desc" data-i18n="growth_desc">Established SME — unlimited contracts + AI alerts</div>
+          <ul class="price-features">
+            <li data-i18n="f7">Unlimited contracts</li>
+            <li data-i18n="f8">AI treasury alerts</li>
+            <li data-i18n="f9">Billing discrepancy detection</li>
+            <li data-i18n="f10">Optimization recommendations</li>
+            <li data-i18n="f11">API & accounting exports</li>
+            <li data-i18n="f12">Dedicated account manager</li>
+            <li data-i18n="f13">99.9% SLA & priority support</li>
+          </ul>
+          <button class="btn btn-primary" style="width:100%" onclick="openSignup()" data-i18n="book_demo">Book a 15-min Demo</button>
+          <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="openCrypto('growth')" data-i18n="subscribe">Subscribe</button>
+          <p class="pay-note" data-i18n="pay_note">Payment by bank transfer or crypto (USDT TRC20 / BTC / ETH). Invoice available.</p>
+        </div>
+      </div>
+      <p style="text-align:center;margin-top:28px;color:var(--muted);font-size:.9rem" data-i18n="accepted">Accepted: Bank transfer · USDT (TRC20) · BTC · ETH · Invoice on request</p>
+    </div>
+  </section>
+
+  <section class="section" id="security">
+    <div class="security-section">
+      <div>
+        <h2 data-i18n="sec_title">Built for trust</h2>
+        <p data-i18n="sec_p1">Companies do not entrust financial data to amateur tools. AuditorIA is designed to look and behave like the systems your finance team already relies on.</p>
+        <p data-i18n="sec_p2">Every document is encrypted at rest and in transit. Access is logged. No data is sold or shared with third parties.</p>
+        <ul class="security-list">
+          <li>✓ <span data-i18n="sec_l1">AES-256 encryption at rest & in transit</span></li>
+          <li>✓ <span data-i18n="sec_l2">Full GDPR compliance · EU data residency</span></li>
+          <li>✓ <span data-i18n="sec_l3">No plaintext storage of uploaded contracts</span></li>
+          <li>✓ <span data-i18n="sec_l4">Audit logs for every access and action</span></li>
+        </ul>
+      </div>
+      <div class="feature-card" style="padding:36px">
+        <div class="feature-icon" style="width:56px;height:56px;font-size:1.5rem">🛡️</div>
+        <h3 style="font-size:1.15rem;margin-bottom:12px" data-i18n="sec_card_t">Your data stays yours</h3>
+        <p data-i18n="sec_card_d">We process data only to deliver the service. No training on your contracts. No resale. Export or delete everything at any time.</p>
+      </div>
+    </div>
+  </section>
+  <footer><p>© 2026 AuditorIA. <span data-i18n="footer">Enterprise financial intelligence.</span></p></footer>
+</div>
+
+<div class="modal-overlay" id="loginModal">
+  <div class="modal">
+    <h3 data-i18n="login_title">Sign in to AuditorIA</h3>
+    <p class="sub" data-i18n="login_sub">Access your financial intelligence dashboard</p>
+    <form onsubmit="return handleLogin(event)">
+      <div class="form-group"><label data-i18n="email">Email</label><input type="email" id="loginEmail" required></div>
+      <div class="form-group"><label data-i18n="password">Password</label><input type="password" id="loginPassword" required></div>
+      <p id="loginError" style="color:var(--red);font-size:.82rem;margin:-6px 0 10px;display:none"></p>
+      <button type="submit" class="btn btn-primary" style="width:100%" data-i18n="sign_in">Sign in</button>
+    </form>
+    <p style="text-align:center;margin-top:14px;font-size:.82rem">
+      <a href="#" onclick="closeLogin();openForgot();return false" style="color:var(--em)" data-i18n="forgot_password">Forgot password?</a>
+    </p>
+    <p style="text-align:center;margin-top:6px;font-size:.82rem;color:var(--muted)" data-i18n="no_account">
+      No account yet? <a href="#" onclick="closeLogin();openSignup();return false" style="color:var(--em)" data-i18n="create_account">Create one</a>
+    </p>
+    <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="closeLogin()" data-i18n="close">Close</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="signupModal">
+  <div class="modal">
+    <h3 data-i18n="signup_title">Create your account</h3>
+    <p class="sub" data-i18n="signup_sub">Start monitoring your contracts, invoices and cash flow.</p>
+    <form onsubmit="return handleSignup(event)">
+      <div class="form-group"><label data-i18n="email">Email</label><input type="email" id="signupEmail" required></div>
+      <div class="form-group"><label data-i18n="password">Password</label><input type="password" id="signupPassword" required minlength="10"></div>
+      <p style="font-size:.75rem;color:var(--muted);margin:-8px 0 12px" data-i18n="signup_hint">At least 10 characters.</p>
+      <p id="signupError" style="color:var(--red);font-size:.82rem;margin:-6px 0 10px;display:none"></p>
+      <button type="submit" class="btn btn-primary" style="width:100%" data-i18n="create_account_btn">Create account</button>
+    </form>
+    <p style="text-align:center;margin-top:14px;font-size:.82rem;color:var(--muted)" data-i18n="have_account">
+      Already have an account? <a href="#" onclick="closeSignup();openLogin();return false" style="color:var(--em)" data-i18n="sign_in_link">Sign in</a>
+    </p>
+    <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="closeSignup()" data-i18n="close">Close</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="forgotModal">
+  <div class="modal">
+    <h3 data-i18n="forgot_title">Reset your password</h3>
+    <p class="sub" data-i18n="forgot_sub">Enter your email — if an account exists, we'll send a reset link.</p>
+    <form onsubmit="return handleForgot(event)">
+      <div class="form-group"><label data-i18n="email">Email</label><input type="email" id="forgotEmail" required></div>
+      <button type="submit" class="btn btn-primary" style="width:100%" data-i18n="send_link">Send reset link</button>
+    </form>
+    <p id="forgotMsg" style="text-align:center;margin-top:14px;font-size:.85rem;color:var(--egl);display:none" data-i18n="forgot_sent">If that email is registered, a reset link is on its way.</p>
+    <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="closeForgot()" data-i18n="close">Close</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="cryptoModal">
+  <div class="modal">
+    <h3 data-i18n="crypto_title">Complete your subscription</h3>
+    <p class="sub" data-i18n="crypto_desc">Secure checkout via NOWPayments. Bank transfer / invoice: contact us after the demo.</p>
+    <div id="selected-plan" style="margin-bottom:16px;font-weight:600;text-align:center"></div>
+    <button class="btn btn-primary" style="width:100%;margin-bottom:10px" onclick="goToNowPayments()" data-i18n="pay_now">Continue to payment</button>
+    <button class="btn btn-outline" style="width:100%" onclick="closeCrypto()" data-i18n="close">Close</button>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-icon">🛡️</div>
+      <div><div class="logo-text">Auditor<span>IA</span></div><div class="logo-sub">FINTECH · IA</div></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-label" data-i18n="menu">Menu</div>
+      <button class="nav-item active" data-page="dashboard"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg><span data-i18n="nav_dashboard">Dashboard</span></button>
+      <button class="nav-item" data-page="contrats"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg><span data-i18n="nav_contracts">Contracts</span></button>
+      <button class="nav-item" data-page="flux"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg><span data-i18n="nav_cashflow">Bank Flows</span></button>
+      <button class="nav-item" data-page="alertes"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg><span data-i18n="nav_alerts">Alerts</span><span class="badge-count" id="navAlertBadge">3</span></button>
+      <div class="nav-label" data-i18n="settings_label">Settings</div>
+      <button class="nav-item" data-page="params" style="opacity:.7"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg><span data-i18n="nav_settings">Settings</span></button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-av">AD</div>
+        <div><div class="user-name">A. Dupont</div><div class="user-role" data-i18n="role">Financial Manager</div></div>
+      </div>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+        <div>
+          <div class="topbar-title" id="page-title">Dashboard</div>
+          <div class="topbar-sub" data-i18n="topbar_sub">Financial health overview</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <select class="lang-select" id="appLang" onchange="setLang(this.value)"><option value="en">EN</option><option value="fr">FR</option></select>
+        <button class="btn btn-outline btn-sm" onclick="logout()" data-i18n="logout">Log out</button>
+      </div>
+    </header>
+    <div class="content">
+      <div class="page active" id="page-dashboard">
+        <div class="sub-banner free" id="subBanner">
+          <span id="subStatusText">Free plan — 2 contract analyses remaining</span>
+          <button type="button" class="btn btn-primary btn-sm" id="subUpgradeBtn">Upgrade</button>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">↓ <span data-i18n="stat_treasury">Treasury</span></div><div class="stat-value" id="statTreasury">—</div><div class="stat-change" id="statTreasuryChange"></div></div>
+          <div class="stat-card"><div class="stat-label">✦ <span data-i18n="stat_savings">Savings realized</span></div><div class="stat-value" id="statSavings">—</div><div class="stat-change up" data-i18n="ytd_label">YTD</div></div>
+          <div class="stat-card"><div class="stat-label">↓ <span data-i18n="stat_in">Inflows</span></div><div class="stat-value" id="statInflows">—</div><div class="stat-change" id="statInflowsChange"></div></div>
+          <div class="stat-card"><div class="stat-label">↑ <span data-i18n="stat_out">Outflows</span></div><div class="stat-value" id="statOutflows">—</div><div class="stat-change" id="statOutflowsChange"></div></div>
+        </div>
+        <div class="charts-row">
+          <div class="chart-card">
+            <h3 data-i18n="chart_treasury">Treasury evolution (6 months)</h3>
+            <div class="chart-container"><canvas id="treasuryChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3><span data-i18n="alerts_title">Alerts & anomalies</span> <span class="badge badge-warning" id="alertCountBadge">3</span></h3>
+            <div class="alerts-box" id="dashboard-alerts"></div>
+          </div>
+        </div>
+        <div class="charts-row">
+          <div class="chart-card">
+            <h3 data-i18n="chart_savings">Savings realized</h3>
+            <div class="chart-container"><canvas id="savingsChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3 data-i18n="upload_title">Secure deposit zone</h3>
+            <div class="upload-zone" id="uploadZoneDash" onclick="document.getElementById('fileInput').click()">
+              <div style="font-size:1.8rem">☁️</div>
+              <h3 data-i18n="upload_h">Upload PDF contracts</h3>
+              <p data-i18n="upload_p">Drag & drop or click · AES-256 · GDPR · PDF only</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page" id="page-contrats">
+        <div class="form-group" style="max-width:320px;margin-bottom:14px">
+          <label data-i18n="doc_kind_label">Document type</label>
+          <select id="docKindSelect" style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:.9rem">
+            <option value="contract" data-i18n="doc_kind_contract">Contract</option>
+            <option value="invoice" data-i18n="doc_kind_invoice">Invoice</option>
+            <option value="purchase_order" data-i18n="doc_kind_po">Purchase order</option>
+            <option value="bank_statement" data-i18n="doc_kind_bank">Bank statement (CSV)</option>
+          </select>
+        </div>
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+          <div style="font-size:2rem">📄</div>
+          <h3 data-i18n="upload_title">Secure deposit zone</h3>
+          <p data-i18n="upload_desc">Drag PDF contracts here · End-to-end encryption · Never stored in plaintext</p>
+          <input type="file" id="fileInput" accept=".pdf,.csv" multiple hidden>
+        </div>
+        <table class="contracts-table">
+          <thead><tr><th data-i18n="th_contract">Contract</th><th data-i18n="th_vendor">Vendor</th><th data-i18n="th_amount">Annual amount</th><th data-i18n="th_expiry">Expiry</th><th data-i18n="th_status">Status</th></tr></thead>
+          <tbody>
+            <tr><td>Cloud Infrastructure</td><td>AWS Europe</td><td>€ 48,000</td><td>15 Nov 2026</td><td><span class="badge badge-warning" data-i18n="status_expiry">Expiring soon</span></td></tr>
+            <tr><td>SaaS CRM License</td><td>Salesforce</td><td>€ 22,800</td><td>02 Mar 2027</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
+            <tr><td>IT Maintenance</td><td>TechSupport SA</td><td>€ 15,600</td><td>30 Sep 2026</td><td><span class="badge badge-critical" data-i18n="status_renegotiate">To renegotiate</span></td></tr>
+            <tr><td>Cyber Insurance</td><td>AXA Corporate</td><td>€ 9,200</td><td>12 Jan 2027</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
+            <tr><td>Office Lease</td><td>Paris Real Estate</td><td>€ 84,000</td><td>01 Jun 2028</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="page" id="page-flux">
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label" data-i18n="inflows">Inflows this month</div><div class="stat-value" style="color:var(--egl)" id="fluxInflows">—</div></div>
+          <div class="stat-card"><div class="stat-label" data-i18n="outflows">Outflows this month</div><div class="stat-value" id="fluxOutflows">—</div></div>
+          <div class="stat-card"><div class="stat-label" data-i18n="net_balance">Net balance</div><div class="stat-value" style="color:var(--egl)" id="fluxNet">—</div></div>
+          <div class="stat-card"><div class="stat-label" data-i18n="anomalies">Anomalies</div><div class="stat-value" style="color:var(--amber)" id="anomalyCount">0</div></div>
+        </div>
+        <div class="chart-card"><h3 data-i18n="chart_cashflow">Cash flow (30 days)</h3><div class="chart-container"><canvas id="cashflowChart"></canvas></div></div>
+      </div>
+      <div class="page" id="page-alertes">
+        <h3 style="margin-bottom:16px" data-i18n="all_alerts">All alerts</h3>
+        <div class="alerts-box" id="full-alerts" style="max-height:none"></div>
+      </div>
+      <div class="page" id="page-params">
+        <div class="chart-card"><h3 data-i18n="nav_settings">Settings</h3><p style="color:var(--muted);margin-top:12px" data-i18n="settings_soon">Account settings available after full subscription activation.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span style="color:var(--em)">⚡</span><div><strong data-i18n="new_anomaly">New anomaly detected</strong><div style="font-size:.82rem;color:var(--muted)" id="toastMsg"></div></div></div>
+
+<script>
+const i18n={
+en:{nav_features:"Features",nav_pricing:"Pricing",nav_security:"Security",login:"Log in",book_demo:"Start free 15-min demo",hero_badge:"AI-powered financial intelligence",hero_title:"Detect financial anomalies<br><span>before they cost you</span>",hero_proof:"Clients detect on average $12,430 in gaps per year. ROI in 11 days.",hero_sub:"AuditorIA monitors contracts, bank flows and invoices in real time. Automatic alerts, savings detection, bank-grade security — built for finance teams who cannot afford amateur tools.",cta_demo:"Start free 15-min demo",cta_pricing:"View pricing",trust_aes:"AES-256 encryption",trust_gdpr:"GDPR compliant",trust_eu:"EU hosting",trust_invoice:"Invoice available",features_title:"Built for finance directors",features_sub:"Real-time monitoring, automatic anomaly detection, secure contract management.",feat1_t:"Treasury dashboard",feat1_d:"Live view of cash, inflows and outflows. Spot trends before they become problems.",feat2_t:"Contract tracking",feat2_d:"Upload PDFs securely. Automatic expiry alerts and renegotiation signals.",feat3_t:"AI anomaly detection",feat3_d:"Billing gaps, double payments, unusual transfers — detected continuously.",feat4_t:"Savings detection",feat4_d:"Find overcharges and better rates across vendor contracts automatically.",feat5_t:"Bank-grade security",feat5_d:"AES-256, GDPR, EU hosting. Your data never leaves secured infrastructure.",feat6_t:"Real-time alerts",feat6_d:"Critical and warning alerts as soon as anomalies are found.",pricing_title:"ROI in less than 30 days. Cancel anytime.",pricing_sub:"Enterprise plans for SMEs that need control over contracts and cash.",per_month:"/ month",starter_desc:"Small SME — up to 50 tracked contracts",growth_desc:"Established SME — unlimited contracts + AI alerts",f1:"Up to 50 contracts",f2:"Automatic expiry alerts",f3:"Treasury dashboard",f4:"Secure document deposit",f5:"Priority email support",f6:"GDPR & encryption",f7:"Unlimited contracts",f8:"AI treasury alerts",f9:"Billing discrepancy detection",f10:"Optimization recommendations",f11:"API & accounting exports",f12:"Dedicated account manager",f13:"99.9% SLA & priority support",subscribe:"Subscribe",pay_note:"Payment by bank transfer or crypto (USDT TRC20 / BTC / ETH). Invoice available.",accepted:"Accepted: Bank transfer · USDT (TRC20) · BTC · ETH · Invoice on request",sec_title:"Built for trust",sec_p1:"Companies do not entrust financial data to amateur tools. AuditorIA is designed to look and behave like the systems your finance team already relies on.",sec_p2:"Every document is encrypted at rest and in transit. Access is logged. No data is sold or shared with third parties.",sec_l1:"AES-256 encryption at rest & in transit",sec_l2:"Full GDPR compliance · EU data residency",sec_l3:"No plaintext storage of uploaded contracts",sec_l4:"Audit logs for every access and action",sec_card_t:"Your data stays yours",sec_card_d:"We process data only to deliver the service. No training on your contracts. No resale. Export or delete everything at any time.",footer:"Enterprise financial intelligence.",login_title:"Sign in to AuditorIA",login_sub:"Access your financial intelligence dashboard",email:"Email",password:"Password",sign_in:"Sign in",demo_hint:"Demo: use the pre-filled credentials",close:"Close",demo_title:"Book a 15-minute demo",demo_sub:"We walk through your use case and show how AuditorIA detects gaps on your contracts and cash flows.",company:"Company",send_request:"Send request",demo_or:"Or email Promptforgai@gmail.com — response within 24h.",crypto_title:"Complete your subscription",crypto_desc:"Secure checkout via NOWPayments. Bank transfer / invoice: contact us any time.",pay_now:"Continue to payment",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contracts",nav_cashflow:"Bank Flows",nav_alerts:"Alerts",settings_label:"Settings",nav_settings:"Settings",role:"Financial Manager",topbar_sub:"Financial health overview",logout:"Log out",stat_treasury:"Treasury",stat_savings:"Savings realized",stat_in:"Inflows",stat_out:"Outflows",vs_prev:"vs previous month",chart_treasury:"Treasury evolution (6 months)",alerts_title:"Alerts & anomalies",chart_savings:"Savings realized",upload_title:"Secure deposit zone",upload_h:"Upload PDF contracts",upload_p:"Drag & drop or click · AES-256 · GDPR · PDF only",upload_desc:"Drag PDF contracts here · End-to-end encryption · Never stored in plaintext",th_contract:"Contract",th_vendor:"Vendor",th_amount:"Annual amount",th_expiry:"Expiry",th_status:"Status",status_expiry:"Expiring soon",status_active:"Active",status_renegotiate:"To renegotiate",inflows:"Inflows this month",outflows:"Outflows this month",net_balance:"Net balance",anomalies:"Anomalies",chart_cashflow:"Cash flow (30 days)",all_alerts:"All alerts",settings_soon:"Account settings available after full subscription activation.",new_anomaly:"New anomaly detected",titles:{dashboard:"Dashboard",contrats:"Contracts",flux:"Bank Flows",alertes:"Alerts",params:"Settings"}},
+fr:{nav_features:"Fonctionnalités",nav_pricing:"Tarifs",nav_security:"Sécurité",login:"Connexion",book_demo:"Démarrer la démo gratuite de 15 min",hero_badge:"Intelligence financière propulsée par l'IA",hero_title:"Détectez les anomalies financières<br><span>avant qu'elles ne coûtent</span>",hero_proof:"Nos clients détectent en moyenne 12 430 $ d'écarts par an. ROI en 11 jours.",hero_sub:"AuditorIA surveille contrats, flux bancaires et factures en temps réel. Alertes automatiques, détection d'économies, sécurité de niveau bancaire.",cta_demo:"Démarrer la démo gratuite de 15 min",cta_pricing:"Voir les tarifs",trust_aes:"Chiffrement AES-256",trust_gdpr:"Conformité RGPD",trust_eu:"Hébergement UE",trust_invoice:"Facture disponible",features_title:"Conçu pour les directions financières",features_sub:"Surveillance temps réel, détection d'anomalies, gestion sécurisée des contrats.",feat1_t:"Tableau de trésorerie",feat1_d:"Vue live de la trésorerie, entrées et sorties.",feat2_t:"Suivi des contrats",feat2_d:"Dépôt PDF sécurisé. Alertes d'échéance automatiques.",feat3_t:"Détection d'anomalies IA",feat3_d:"Écarts de facturation, doubles paiements, virements inhabituels.",feat4_t:"Détection d'économies",feat4_d:"Surcoûts et meilleurs tarifs sur vos contrats fournisseurs.",feat5_t:"Sécurité bancaire",feat5_d:"AES-256, RGPD, hébergement UE.",feat6_t:"Alertes temps réel",feat6_d:"Alertes critiques dès qu'une anomalie est trouvée.",pricing_title:"ROI en moins de 30 jours. Résiliable à tout moment.",pricing_sub:"Plans entreprise pour PME qui veulent maîtriser contrats et cash.",per_month:"/ mois",starter_desc:"Petite PME — jusqu'à 50 contrats suivis",growth_desc:"PME établie — contrats illimités + alertes IA",f1:"Jusqu'à 50 contrats",f2:"Alertes d'échéance automatiques",f3:"Tableau de bord trésorerie",f4:"Dépôt sécurisé de documents",f5:"Support email prioritaire",f6:"RGPD & chiffrement",f7:"Contrats illimités",f8:"Alertes de trésorerie par IA",f9:"Détection d'écarts de facturation",f10:"Recommandations d'optimisation",f11:"API & exports comptables",f12:"Account manager dédié",f13:"SLA 99,9 % & support prioritaire",subscribe:"S'abonner",pay_note:"Paiement par virement ou crypto (USDT TRC20 / BTC / ETH). Facture disponible.",accepted:"Acceptés : virement bancaire · USDT (TRC20) · BTC · ETH · Facture sur demande",sec_title:"Conçu pour la confiance",sec_p1:"Une entreprise ne confie pas ses données financières à un outil amateur.",sec_p2:"Chaque document est chiffré. Aucune donnée n'est vendue.",sec_l1:"Chiffrement AES-256 au repos et en transit",sec_l2:"Conformité RGPD · Résidence des données en UE",sec_l3:"Aucun stockage en clair des contrats",sec_l4:"Journaux d'audit pour chaque accès",sec_card_t:"Vos données restent les vôtres",sec_card_d:"Traitement uniquement pour le service. Pas d'entraînement sur vos contrats. Pas de revente.",footer:"Intelligence financière d'entreprise.",login_title:"Connexion à AuditorIA",login_sub:"Accédez à votre tableau de bord",email:"E-mail",password:"Mot de passe",sign_in:"Se connecter",demo_hint:"Démo : identifiants pré-remplis",close:"Fermer",demo_title:"Réserver une démo de 15 minutes",demo_sub:"Nous parcourons votre cas d'usage et montrons comment AuditorIA détecte les écarts.",company:"Entreprise",send_request:"Envoyer la demande",demo_or:"Ou e-mail Promptforgai@gmail.com — réponse sous 24h.",crypto_title:"Finaliser l'abonnement",crypto_desc:"Paiement sécurisé via NOWPayments. Virement / facture : contactez-nous à tout moment.",pay_now:"Continuer vers le paiement",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contrats",nav_cashflow:"Flux Bancaires",nav_alerts:"Alertes",settings_label:"Paramètres",nav_settings:"Paramètres",role:"Financial Manager",topbar_sub:"Aperçu de la santé financière",logout:"Déconnexion",stat_treasury:"Trésorerie",stat_savings:"Économies réalisées",stat_in:"Flux entrants",stat_out:"Flux sortants",vs_prev:"vs mois précédent",chart_treasury:"Évolution de la trésorerie (6 mois)",alerts_title:"Alertes & anomalies",chart_savings:"Économies réalisées",upload_title:"Zone de dépôt sécurisée",upload_h:"Téléversez vos contrats PDF",upload_p:"Glissez-déposez ou cliquez · AES-256 · RGPD · PDF uniquement",upload_desc:"Glissez vos PDF ici · Chiffrement · Jamais stockés en clair",th_contract:"Contrat",th_vendor:"Fournisseur",th_amount:"Montant annuel",th_expiry:"Échéance",th_status:"Statut",status_expiry:"Échéance proche",status_active:"Actif",status_renegotiate:"À renégocier",inflows:"Entrées ce mois",outflows:"Sorties ce mois",net_balance:"Solde net",anomalies:"Anomalies",chart_cashflow:"Flux de trésorerie (30 jours)",all_alerts:"Toutes les alertes",settings_soon:"Paramètres disponibles après activation de l'abonnement.",new_anomaly:"Nouvelle anomalie détectée",titles:{dashboard:"Tableau de bord",contrats:"Contrats",flux:"Flux Bancaires",alertes:"Alertes",params:"Paramètres"}}
+};
+
+let currentLang="en",chartsReady=false,anomalyTimer=null,anomalyIndex=0,currentUserLoggedIn=false,pendingPlan=null;
+// (anciens liens de paiement fixes NP_LINKS/WORKER_URL retirés : ils ne créaient pas de commande
+// liée à un compte, donc un paiement par ce biais n'aurait jamais déclenché l'activation réelle)
+let selectedPlan="starter";
+const FREE_LIMIT=2,MONTH_MS=30*24*60*60*1000;
+
+function setLang(lang){currentLang=lang;document.documentElement.lang=lang;document.getElementById("langSelect").value=lang;const a=document.getElementById("appLang");if(a)a.value=lang;document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.getAttribute("data-i18n");if(i18n[lang][k]!==undefined)el.innerHTML=i18n[lang][k]});const ap=document.querySelector(".nav-item.active")?.dataset.page;if(ap&&i18n[lang].titles[ap])document.getElementById("page-title").textContent=i18n[lang].titles[ap];renderAlerts();updateSubUI()}
+function openLogin(){document.getElementById("loginModal").classList.add("open")}
+function closeLogin(){document.getElementById("loginModal").classList.remove("open")}
+function openSignup(){document.getElementById("signupModal").classList.add("open")}
+function closeSignup(){document.getElementById("signupModal").classList.remove("open")}
+function openForgot(){document.getElementById("forgotModal").classList.add("open")}
+function closeForgot(){document.getElementById("forgotModal").classList.remove("open")}
+
+async function enterApp(){
+  currentUserLoggedIn=true;
+  document.getElementById("publicNav").classList.add("hidden");
+  document.getElementById("landing").classList.add("hidden");
+  document.getElementById("app").classList.add("visible");
+  initCharts();
+  await refreshFindings();
+  startAnomalyDetection();
+  await checkSubscription();
+  const ub=document.getElementById("subUpgradeBtn");
+  if(ub)ub.onclick=()=>{logout();setTimeout(()=>{const el=document.getElementById("pricing");if(el)el.scrollIntoView({behavior:"smooth"})},200)};
+  // Si l'utilisateur venait de cliquer "S'abonner" avant d'avoir de compte, on reprend le paiement
+  // là où il s'est arrêté au lieu de le laisser recommencer depuis la page de tarifs.
+  if(pendingPlan){const p=pendingPlan;pendingPlan=null;openCrypto(p)}
+}
+
+async function handleLogin(e){
+  e.preventDefault();
+  const email=document.getElementById("loginEmail").value;
+  const password=document.getElementById("loginPassword").value;
+  const errEl=document.getElementById("loginError");
+  errEl.style.display="none";
+  try{
+    const res=await fetch(API_BASE+"/auth/login",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+    const data=await res.json();
+    if(!res.ok){errEl.textContent=data.error||"Erreur de connexion";errEl.style.display="block";return false}
+    closeLogin();
+    await enterApp();
+  }catch(err){errEl.textContent="Impossible de contacter le serveur";errEl.style.display="block"}
+  return false;
+}
+
+async function handleSignup(e){
+  e.preventDefault();
+  const email=document.getElementById("signupEmail").value;
+  const password=document.getElementById("signupPassword").value;
+  const errEl=document.getElementById("signupError");
+  errEl.style.display="none";
+  try{
+    const res=await fetch(API_BASE+"/auth/signup",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+    const data=await res.json();
+    if(!res.ok){errEl.textContent=data.error||"Erreur lors de la création du compte";errEl.style.display="block";return false}
+    closeSignup();
+    await enterApp();
+  }catch(err){errEl.textContent="Impossible de contacter le serveur";errEl.style.display="block"}
+  return false;
+}
+
+async function handleForgot(e){
+  e.preventDefault();
+  const email=document.getElementById("forgotEmail").value;
+  try{
+    await fetch(API_BASE+"/auth/forgot-password",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});
+  }catch(err){}
+  document.getElementById("forgotMsg").style.display="block";
+  return false;
+}
+
+async function logout(){
+  try{await fetch(API_BASE+"/auth/logout",{method:"POST",credentials:"include"})}catch(e){}
+  currentUserLoggedIn=false;
+  currentSub={plan:"free",free_left:FREE_LIMIT,active:false,expired:false};
+  document.getElementById("app").classList.remove("visible");
+  document.getElementById("publicNav").classList.remove("hidden");
+  document.getElementById("landing").classList.remove("hidden");
+  stopAnomalyDetection();
+}
+
+function openCrypto(plan){
+  selectedPlan=plan||"starter";
+  if(!currentUserLoggedIn){pendingPlan=selectedPlan;openSignup();return}
+  document.getElementById("selected-plan").textContent=plan==="starter"?"Starter — $2,000 / month":"Growth — $5,000 / month";
+  document.getElementById("cryptoModal").classList.add("open");
+}
+function closeCrypto(){document.getElementById("cryptoModal").classList.remove("open")}
+async function goToNowPayments(){
+  try{
+    const base=location.href.replace(/index\.html.*/,"").replace(/\/#.*/,"").replace(/app\.html.*/,"");
+    const successUrl=base+(base.endsWith("/")?"":"/")+"activated.html";
+    // La facture est créée côté serveur, liée au compte de la session en cours — jamais un plan
+    // choisi librement par le client sans compte associé.
+    const res=await fetch(API_BASE+"/create-invoice",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan:selectedPlan,success_url:successUrl})});
+    const data=await res.json();
+    if(res.ok&&data.invoice_url){window.location.href=data.invoice_url;return}
+    showToast(data.error||"Payment error");
+  }catch(err){showToast(currentLang==="fr"?"Erreur de paiement":"Payment error")}
+}
+
+// Statut d'abonnement : lu UNIQUEMENT depuis le serveur (GET /subscription). Il n'y a plus de
+// copie dans localStorage — c'était contournable en éditant le navigateur pour s'auto-activer.
+let currentSub={plan:"free",free_left:FREE_LIMIT,active:false,expired:false};
+let demoTickTimer=null;
+async function checkSubscription(){
+  try{
+    const res=await fetch(API_BASE+"/subscription",{credentials:"include"});
+    if(res.ok)currentSub=await res.json();
+  }catch(err){}
+  updateSubUI();
+  return currentSub;
+}
+function updateSubUI(){
+  const s=currentSub,banner=document.getElementById("subBanner"),text=document.getElementById("subStatusText"),btn=document.getElementById("subUpgradeBtn");
+  if(!banner||!text)return;
+  if(demoTickTimer){clearInterval(demoTickTimer);demoTickTimer=null}
+  if(s.plan==="demo"&&s.demo_ends_at){
+    banner.className="sub-banner free";
+    if(btn){btn.style.display="";btn.textContent=currentLang==="fr"?"Passer à un plan":"Upgrade"}
+    const render=()=>{
+      const msLeft=s.demo_ends_at-Date.now();
+      if(msLeft<=0){clearInterval(demoTickTimer);demoTickTimer=null;checkSubscription();return}
+      const mm=String(Math.floor(msLeft/60000)).padStart(2,"0"),ss=String(Math.floor((msLeft%60000)/1000)).padStart(2,"0");
+      text.textContent=(currentLang==="fr"?`Démo gratuite — ${mm}:${ss} restantes`:`Free demo — ${mm}:${ss} left`);
+    };
+    render();
+    demoTickTimer=setInterval(render,1000);
+  }
+  else if(s.active){const days=Math.max(0,Math.ceil((s.expires_at-Date.now())/(24*60*60*1000)));banner.className="sub-banner ok";text.textContent=currentLang==="fr"?`Abonnement ${s.plan} actif — ${days} j restants`:`${s.plan} active — ${days} days left`;if(btn)btn.style.display="none"}
+  else if(s.expired){banner.className="sub-banner expired";text.textContent=currentLang==="fr"?"Abonnement expiré":"Subscription expired";if(btn){btn.style.display="";btn.textContent=currentLang==="fr"?"Renouveler":"Renew"}}
+  else{banner.className="sub-banner free";const left=typeof s.free_left==="number"?s.free_left:FREE_LIMIT;text.textContent=currentLang==="fr"?`Démo terminée — ${left} analyse(s) gratuite(s) restante(s)`:`Demo ended — ${left} free analyses remaining`;if(btn){btn.style.display="";btn.textContent=currentLang==="fr"?"Passer à un plan":"Upgrade"}}
+}
+
+
+document.querySelectorAll(".nav-item").forEach(item=>{item.addEventListener("click",()=>{const page=item.dataset.page;if(!page)return;document.querySelectorAll(".nav-item").forEach(n=>n.classList.remove("active"));item.classList.add("active");document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));const el=document.getElementById("page-"+page);if(el)el.classList.add("active");document.getElementById("page-title").textContent=i18n[currentLang].titles[page]||page;document.getElementById("sidebar").classList.remove("open")})});
+
+let alerts=[];
+function renderAlerts(){
+  const html=alerts.length
+    ? alerts.map(a=>`<div class="alert-item"><div class="alert-icon ${a.type}">${a.type==="critical"?"⚠":a.type==="warning"?"⏰":"i"}</div><div style="flex:1"><div class="alert-title">${a.title[currentLang]}</div><div class="alert-desc">${a.desc[currentLang]}</div><div class="alert-meta">${a.meta[currentLang]}</div></div></div>`).join("")
+    : `<p style="color:var(--muted);font-size:.85rem;padding:12px 0">${currentLang==="fr"?"Aucune anomalie détectée pour l'instant.":"No anomalies detected yet."}</p>`;
+  const da=document.getElementById("dashboard-alerts"),fa=document.getElementById("full-alerts");
+  if(da)da.innerHTML=html;if(fa)fa.innerHTML=html;
+  const b=document.getElementById("alertCountBadge"),n=document.getElementById("navAlertBadge"),an=document.getElementById("anomalyCount");
+  if(b)b.textContent=alerts.length;if(n)n.textContent=alerts.length;if(an)an.textContent=Math.min(alerts.filter(x=>x.type!=="info").length,9);
+}
+function showToast(msg){document.getElementById("toastMsg").textContent=msg;const t=document.getElementById("toast");t.classList.add("show");setTimeout(()=>t.classList.remove("show"),4500)}
+// Repasse périodiquement sur le serveur pour rafraîchir les vraies alertes (remplace l'ancienne
+// injection aléatoire d'anomalies fictives). Le moteur de règles tourne côté serveur (POST /analyze),
+// typiquement déclenché après chaque upload et/ou par un cron pour les échéances de contrat.
+function startAnomalyDetection(){anomalyTimer=setInterval(()=>{refreshFindings();refreshSummary()},28000)}
+function stopAnomalyDetection(){if(anomalyTimer)clearInterval(anomalyTimer)}
+let chartInstances={};
+function fmtEUR(n){return new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(n||0)}
+function fmtChange(pct){const el=document.createElement("span");return (pct>=0?"↑ ":"↓ ")+Math.abs(pct)+"%"}
+
+async function refreshSummary(){
+  let data;
+  try{
+    const res=await fetch(API_BASE+"/summary",{credentials:"include"});
+    if(!res.ok)return;
+    data=await res.json();
+  }catch(err){return}
+
+  const st=data.stats||{};
+  const set=(id,val)=>{const el=document.getElementById(id);if(el)el.textContent=val};
+  set("statTreasury",fmtEUR(st.treasury?.value));
+  set("statTreasuryChange",st.treasury?fmtChange(st.treasury.change_pct):"");
+  set("statSavings",fmtEUR(st.savings_ytd?.value));
+  set("statInflows",fmtEUR(st.inflows?.value));
+  set("statInflowsChange",st.inflows?fmtChange(st.inflows.change_pct):"");
+  set("statOutflows",fmtEUR(st.outflows?.value));
+  set("statOutflowsChange",st.outflows?fmtChange(st.outflows.change_pct):"");
+  set("fluxInflows",fmtEUR(st.inflows?.value));
+  set("fluxOutflows",fmtEUR(st.outflows?.value));
+  set("fluxNet",fmtEUR((st.inflows?.value||0)-(st.outflows?.value||0)));
+
+  const opts={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#8ba3b5",font:{size:11}},grid:{color:"rgba(26,45,58,.8)"}},y:{ticks:{color:"#8ba3b5",font:{size:11}},grid:{color:"rgba(26,45,58,.8)"}}}};
+
+  const t=data.monthly_treasury||[];
+  if(chartInstances.treasury)chartInstances.treasury.destroy();
+  chartInstances.treasury=new Chart(document.getElementById("treasuryChart"),{type:"line",data:{labels:t.map(m=>m.label),datasets:[{data:t.map(m=>m.value),borderColor:"#10b981",backgroundColor:"rgba(16,185,129,.12)",fill:true,tension:.4,pointBackgroundColor:"#10b981",pointRadius:4}]},options:opts});
+
+  const s=data.monthly_savings||[];
+  if(chartInstances.savings)chartInstances.savings.destroy();
+  chartInstances.savings=new Chart(document.getElementById("savingsChart"),{type:"bar",data:{labels:s.map(m=>m.label),datasets:[{data:s.map(m=>m.value),backgroundColor:"#10b981",borderRadius:6}]},options:opts});
+
+  const cf=data.cashflow||{labels:[],inflows:[],outflows:[]};
+  if(chartInstances.cashflow)chartInstances.cashflow.destroy();
+  chartInstances.cashflow=new Chart(document.getElementById("cashflowChart"),{type:"bar",data:{labels:cf.labels,datasets:[{label:"In",data:cf.inflows,backgroundColor:"#10b981",borderRadius:4},{label:"Out",data:cf.outflows,backgroundColor:"#1a2d3a",borderRadius:4}]},options:{...opts,plugins:{legend:{display:true,labels:{color:"#8ba3b5"}}}}});
+}
+function initCharts(){
+  refreshSummary();
+}
+// API_BASE : URL du Worker déployé (auditoria-engine). Même domaine que le site → laisser "".
+// Sous-domaine différent → mettre l'URL complète, ex: "https://auditoria-engine.tonaccount.workers.dev"
+const API_BASE = "";
+
+async function refreshFindings(){
+  try{
+    const res=await fetch(API_BASE+"/findings",{credentials:"include"});
+    if(!res.ok){alerts=[];renderAlerts();return}
+    const data=await res.json();
+    alerts=(data.findings||[]).map(f=>({
+      type:f.type,
+      title:{en:f.title,fr:f.title},
+      desc:{en:f.description,fr:f.description},
+      meta:{en:new Date(f.created_at).toLocaleString(),fr:new Date(f.created_at).toLocaleString()}
+    }));
+    renderAlerts();
+  }catch(err){alerts=[];renderAlerts()}
+}
+
+async function onUpload(kind){
+  const file=fi.files[0];
+  if(!file)return;
+  const sel=document.getElementById("docKindSelect");
+  kind=kind||(sel?sel.value:null)||"contract";
+  showToast(currentLang==="fr"?"Fichier reçu · Analyse IA…":"File received · AI analysis…");
+  try{
+    const form=new FormData();
+    form.append("file",file);
+    form.append("kind",kind);
+    const up=await fetch(API_BASE+"/upload",{method:"POST",credentials:"include",body:form});
+    if(up.status===402){
+      // Le serveur refuse : quota gratuit réellement épuisé (vérifié en base, pas dans le navigateur).
+      showToast(currentLang==="fr"?"Limite gratuite atteinte":"Free limit reached");
+      openCrypto("starter");
+      return;
+    }
+    const upData=await up.json();
+    if(!up.ok)throw new Error(upData.error||"upload failed");
+
+    const ex=await fetch(API_BASE+"/extract/"+upData.document_id,{method:"POST",credentials:"include"});
+    if(!ex.ok){const exData=await ex.json();throw new Error(exData.error||"extraction failed")}
+
+    await fetch(API_BASE+"/analyze",{method:"POST",credentials:"include"});
+    await refreshFindings();
+    await refreshSummary();
+    await checkSubscription(); // le compteur d'essais gratuits vient de bouger côté serveur
+    showToast(currentLang==="fr"?"Analyse terminée":"Analysis complete");
+  }catch(err){
+    showToast(currentLang==="fr"?"Erreur d'analyse : "+err.message:"Analysis error: "+err.message);
+  }
+}
+
+const zone=document.getElementById("uploadZone"),fi=document.getElementById("fileInput");
+if(zone){zone.addEventListener("dragover",e=>{e.preventDefault()});zone.addEventListener("drop",e=>{e.preventDefault();if(e.dataTransfer.files.length)onUpload()})}
+if(fi)fi.addEventListener("change",()=>{if(fi.files.length)onUpload()});
+document.getElementById("loginModal").addEventListener("click",e=>{if(e.target.id==="loginModal")closeLogin()});
+document.getElementById("signupModal").addEventListener("click",e=>{if(e.target.id==="signupModal")closeSignup()});
+document.getElementById("forgotModal").addEventListener("click",e=>{if(e.target.id==="forgotModal")closeForgot()});
+document.getElementById("cryptoModal").addEventListener("click",e=>{if(e.target.id==="cryptoModal")closeCrypto()});
+</script>
+</body>
+</html>
