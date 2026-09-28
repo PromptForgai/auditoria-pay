@@ -15,8 +15,9 @@ const PLANS = {
 };
 
 const PLAN_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
-export const FREE_LIMIT = 2;
-export const DEMO_DURATION_MS = 15 * 60 * 1000; // 15 minutes, décomptées depuis la création du compte
+// Documents gratuits par compte (tous types confondus), sans limite de durée.
+// Il en faut au moins 2 pour voir un écart facture/BC : 5 permettent un relevé + facture + BC + 2 contrats.
+export const FREE_LIMIT = 5;
 
 export async function createInvoice(db, userId, plan, successUrl, workerOrigin, apiKey, ipnSecret) {
   plan = (plan || "starter").toLowerCase();
@@ -150,32 +151,19 @@ export async function getSubscription(db, userId) {
   const paidActive = sub.plan !== "free" && sub.expires_at && sub.expires_at > now;
   const paidExpired = sub.plan !== "free" && sub.expires_at && sub.expires_at <= now;
 
-  // Mode démo : 15 minutes de crédit automatique décomptées depuis la création du compte,
-  // calculées à partir de users.created_at — aucune valeur écrite ni lisible côté client.
-  let demoActive = false, demoEndsAt = null;
-  if (!paidActive) {
-    const user = await db.prepare(`SELECT created_at FROM users WHERE id = ?`).bind(userId).first();
-    if (user) {
-      demoEndsAt = user.created_at + DEMO_DURATION_MS;
-      demoActive = now < demoEndsAt;
-    }
-  }
-
   return {
-    plan: paidActive ? sub.plan : (demoActive ? "demo" : (paidExpired ? "expired" : "free")),
+    plan: paidActive ? sub.plan : (paidExpired ? "expired" : "free"),
     expired: paidExpired,
     expires_at: sub.expires_at,
     free_left: Math.max(0, FREE_LIMIT - (sub.free_analyses_used || 0)),
-    active: paidActive || demoActive,
-    demo_active: demoActive,
-    demo_ends_at: demoActive ? demoEndsAt : null
+    active: paidActive
   };
 }
 
 // Vraie porte d'entrée avant chaque analyse — remplace useFreeAnalysis() côté client,
 // qui pouvait être contourné en modifiant le localStorage.
 // Renvoie { allowed, consumed } : consumed=true seulement si un essai GRATUIT a été décompté
-// (abonnement ou démo actifs = pas de décompte), ce qui permet de le rembourser proprement en cas d'échec.
+// (abonnement actif = pas de décompte), ce qui permet de le rembourser proprement en cas d'échec.
 export async function consumeAnalysisCredit(db, userId) {
   const sub = await getSubscription(db, userId);
   if (sub.active) return { allowed: true, consumed: false };

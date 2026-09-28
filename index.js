@@ -322,6 +322,15 @@ export default {
         return json(await getSubscription(db, userId));
       }
 
+      // GET /me — identité du compte connecté (affichée dans le menu du dashboard). Uniquement l'email :
+      // aucune autre donnée de compte, jamais le hash du mot de passe.
+      if (url.pathname === '/me' && request.method === 'GET') {
+        const userId = await getUserId(request, env);
+        const user = await db.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
+        if (!user) throw new HttpError(401, 'non authentifié');
+        return json({ email: user.email });
+      }
+
       // --- Documents & analyse (routes protégées) ---
 
       // POST /upload  — multipart/form-data: file, kind
