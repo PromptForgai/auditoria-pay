@@ -7,7 +7,7 @@ import { runAllRules } from './rules.js';
 import { getFullSummary } from './summary.js';
 import { createInvoice, handleIpn, getOrderStatus, getSubscription, consumeAnalysisCredit, refundAnalysisCredit } from './payments.js';
 import {
-  signup, login, logout, requestPasswordReset, resetPassword, createSession,
+  signup, login, logout, requestPasswordReset, resetPassword, changePassword, createSession,
   getUserIdFromSession, readSessionCookie, sessionCookieHeader, clearSessionCookieHeader
 } from './auth.js';
 import { HttpError } from './errors.js';
@@ -320,6 +320,17 @@ export default {
       if (url.pathname === '/subscription' && request.method === 'GET') {
         const userId = await getUserId(request, env);
         return json(await getSubscription(db, userId));
+      }
+
+      // POST /account/change-password  {current_password, new_password}
+      // Distinct de /auth/reset-password : celle-ci exige une session active plutôt qu'un jeton reçu par email.
+      if (url.pathname === '/account/change-password' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `changepw:${userId}`, 10, HOUR)) throw new HttpError(429, 'Trop de tentatives. Réessaie plus tard.');
+        const token = readSessionCookie(request);
+        const { current_password, new_password } = await readJson(request);
+        await changePassword(db, userId, token, current_password, new_password);
+        return json({ ok: true });
       }
 
       // GET /me — identité du compte connecté (affichée dans le menu du dashboard). Uniquement l'email :

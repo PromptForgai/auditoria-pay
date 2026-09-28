@@ -144,6 +144,25 @@ export async function requestPasswordReset(db, email) {
   return { email, token };
 }
 
+// Changement de mot de passe pour un compte déjà connecté (page Paramètres), différent de resetPassword
+// (qui repose sur un jeton envoyé par email et ne suppose aucune session).
+export async function changePassword(db, userId, currentSessionToken, currentPassword, newPassword) {
+  checkNewPassword(newPassword);
+  const user = await db.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
+  if (!user) throw new HttpError(401, 'non authentifié');
+
+  const ok = await verifyPassword(currentPassword || '', user.password_hash, user.password_salt);
+  if (!ok) throw new HttpError(401, 'mot de passe actuel incorrect');
+
+  const { hash, salt } = await hashPassword(newPassword);
+  await db.prepare(`UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?`).bind(hash, salt, userId).run();
+
+  // Invalide les autres sessions (autres appareils / navigateurs), mais pas celle-ci : l'utilisateur
+  // vient de prouver qu'il connaît le mot de passe, pas besoin de le déconnecter lui-même.
+  const keepHash = await sha256Hex(currentSessionToken);
+  await db.prepare(`DELETE FROM sessions WHERE user_id = ? AND token_hash != ?`).bind(userId, keepHash).run();
+}
+
 export async function resetPassword(db, token, newPassword) {
   checkNewPassword(newPassword);
   const invalid = () => new HttpError(400, 'lien de réinitialisation invalide ou expiré');
