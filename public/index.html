@@ -562,8 +562,7 @@ function openCrypto(plan){
 function closeCrypto(){document.getElementById("cryptoModal").classList.remove("open")}
 async function goToNowPayments(){
   try{
-    const base=location.href.replace(/index\.html.*/,"").replace(/\/#.*/,"").replace(/app\.html.*/,"");
-    const successUrl=base+(base.endsWith("/")?"":"/")+"activated.html";
+    const successUrl=location.origin+"/activated.html"; // le serveur n'accepte que notre propre domaine
     // La facture est créée côté serveur, liée au compte de la session en cours — jamais un plan
     // choisi librement par le client sans compte associé.
     const res=await fetch(API_BASE+"/create-invoice",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan:selectedPlan,success_url:successUrl})});
@@ -610,9 +609,19 @@ function updateSubUI(){
 document.querySelectorAll(".nav-item").forEach(item=>{item.addEventListener("click",()=>{const page=item.dataset.page;if(!page)return;document.querySelectorAll(".nav-item").forEach(n=>n.classList.remove("active"));item.classList.add("active");document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));const el=document.getElementById("page-"+page);if(el)el.classList.add("active");document.getElementById("page-title").textContent=i18n[currentLang].titles[page]||page;document.getElementById("sidebar").classList.remove("open")})});
 
 let alerts=[];
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+async function dismissFinding(id){
+  try{
+    const res=await fetch(API_BASE+"/findings/"+encodeURIComponent(id)+"/status",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"dismissed"})});
+    if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error||"error")}
+    await refreshFindings();refreshSummary();
+  }catch(err){showToast((currentLang==="fr"?"Erreur : ":"Error: ")+err.message)}
+}
 function renderAlerts(){
+  // Tout ce qui vient du serveur passe par esc() : les descriptions contiennent des noms de fournisseurs
+  // lus dans des documents (donnée non fiable) — sans échappement, un PDF piégé pourrait injecter du HTML/JS.
   const html=alerts.length
-    ? alerts.map(a=>`<div class="alert-item"><div class="alert-icon ${a.type}">${a.type==="critical"?"⚠":a.type==="warning"?"⏰":"i"}</div><div style="flex:1"><div class="alert-title">${a.title[currentLang]}</div><div class="alert-desc">${a.desc[currentLang]}</div><div class="alert-meta">${a.meta[currentLang]}</div></div></div>`).join("")
+    ? alerts.map(a=>`<div class="alert-item"><div class="alert-icon ${esc(a.type)}">${a.type==="critical"?"⚠":a.type==="warning"?"⏰":"i"}</div><div style="flex:1"><div class="alert-title">${esc(a.title[currentLang])}</div><div class="alert-desc">${esc(a.desc[currentLang])}</div><div class="alert-meta">${esc(a.meta[currentLang])}</div></div><button type="button" onclick="dismissFinding('${esc(a.id)}')" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:4px 10px;font-size:.72rem;cursor:pointer;flex-shrink:0">${currentLang==="fr"?"Ignorer":"Dismiss"}</button></div>`).join("")
     : `<p style="color:var(--muted);font-size:.85rem;padding:12px 0">${currentLang==="fr"?"Aucune anomalie détectée pour l'instant.":"No anomalies detected yet."}</p>`;
   const da=document.getElementById("dashboard-alerts"),fa=document.getElementById("full-alerts");
   if(da)da.innerHTML=html;if(fa)fa.innerHTML=html;
@@ -676,6 +685,7 @@ async function refreshFindings(){
     if(!res.ok){alerts=[];renderAlerts();return}
     const data=await res.json();
     alerts=(data.findings||[]).map(f=>({
+      id:f.id,
       type:f.type,
       title:{en:f.title,fr:f.title},
       desc:{en:f.description,fr:f.description},
@@ -685,42 +695,50 @@ async function refreshFindings(){
   }catch(err){alerts=[];renderAlerts()}
 }
 
-async function onUpload(kind){
-  const file=fi.files[0];
-  if(!file)return;
+async function onUpload(files){
+  files=Array.from(files||[]);
+  if(!files.length)return;
   const sel=document.getElementById("docKindSelect");
-  kind=kind||(sel?sel.value:null)||"contract";
-  showToast(currentLang==="fr"?"Fichier reçu · Analyse IA…":"File received · AI analysis…");
-  try{
-    const form=new FormData();
-    form.append("file",file);
-    form.append("kind",kind);
-    const up=await fetch(API_BASE+"/upload",{method:"POST",credentials:"include",body:form});
-    if(up.status===402){
-      // Le serveur refuse : quota gratuit réellement épuisé (vérifié en base, pas dans le navigateur).
-      showToast(currentLang==="fr"?"Limite gratuite atteinte":"Free limit reached");
-      openCrypto("starter");
-      return;
+  const kind=(sel?sel.value:null)||"contract";
+  const fr=currentLang==="fr";
+  let done=0;
+  for(const file of files){
+    showToast(fr?`Envoi de ${file.name} · Analyse IA…`:`Uploading ${file.name} · AI analysis…`);
+    try{
+      const form=new FormData();
+      form.append("file",file);
+      form.append("kind",kind);
+      const up=await fetch(API_BASE+"/upload",{method:"POST",credentials:"include",body:form});
+      if(up.status===402){
+        // Le serveur refuse : quota gratuit réellement épuisé (vérifié en base, pas dans le navigateur).
+        showToast(fr?"Limite gratuite atteinte":"Free limit reached");
+        openCrypto("starter");
+        break;
+      }
+      const upData=await up.json().catch(()=>({}));
+      if(!up.ok)throw new Error(upData.error||"upload failed");
+
+      const ex=await fetch(API_BASE+"/extract/"+upData.document_id,{method:"POST",credentials:"include"});
+      if(!ex.ok){const exData=await ex.json().catch(()=>({}));throw new Error(exData.error||"extraction failed")}
+      done++;
+    }catch(err){
+      showToast((fr?"Erreur d'analyse ("+file.name+") : ":"Analysis error ("+file.name+"): ")+err.message);
+      await new Promise(r=>setTimeout(r,2500)); // laisse le message lisible avant le fichier suivant
     }
-    const upData=await up.json();
-    if(!up.ok)throw new Error(upData.error||"upload failed");
-
-    const ex=await fetch(API_BASE+"/extract/"+upData.document_id,{method:"POST",credentials:"include"});
-    if(!ex.ok){const exData=await ex.json();throw new Error(exData.error||"extraction failed")}
-
-    await fetch(API_BASE+"/analyze",{method:"POST",credentials:"include"});
+  }
+  if(done){
+    await fetch(API_BASE+"/analyze",{method:"POST",credentials:"include"}).catch(()=>{});
     await refreshFindings();
     await refreshSummary();
-    await checkSubscription(); // le compteur d'essais gratuits vient de bouger côté serveur
-    showToast(currentLang==="fr"?"Analyse terminée":"Analysis complete");
-  }catch(err){
-    showToast(currentLang==="fr"?"Erreur d'analyse : "+err.message:"Analysis error: "+err.message);
+    showToast(fr?"Analyse terminée":"Analysis complete");
   }
+  await checkSubscription(); // le compteur d'essais gratuits vient de bouger côté serveur
+  if(fi)fi.value=""; // permet de re-sélectionner le même fichier
 }
 
 const zone=document.getElementById("uploadZone"),fi=document.getElementById("fileInput");
-if(zone){zone.addEventListener("dragover",e=>{e.preventDefault()});zone.addEventListener("drop",e=>{e.preventDefault();if(e.dataTransfer.files.length)onUpload()})}
-if(fi)fi.addEventListener("change",()=>{if(fi.files.length)onUpload()});
+if(zone){zone.addEventListener("dragover",e=>{e.preventDefault()});zone.addEventListener("drop",e=>{e.preventDefault();if(e.dataTransfer.files.length)onUpload(e.dataTransfer.files)})}
+if(fi)fi.addEventListener("change",()=>{if(fi.files.length)onUpload(fi.files)});
 document.getElementById("loginModal").addEventListener("click",e=>{if(e.target.id==="loginModal")closeLogin()});
 document.getElementById("signupModal").addEventListener("click",e=>{if(e.target.id==="signupModal")closeSignup()});
 document.getElementById("forgotModal").addEventListener("click",e=>{if(e.target.id==="forgotModal")closeForgot()});
