@@ -153,9 +153,12 @@ footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border
 
 @media(max-width:1000px){.features-grid,.pricing-grid,.security-section,.charts-row{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.public-nav{padding:0 16px}.nav-links{display:none}.hero{padding:56px 20px}.section{padding:48px 20px}.content{padding:16px}}
 @media(max-width:768px){.sidebar{transform:translateX(-100%);transition:transform .25s}.sidebar.open{transform:translateX(0)}.main{margin-left:0}.menu-toggle{display:block}.stats-grid{grid-template-columns:1fr}}
+.support-fab{position:fixed;right:18px;bottom:90px;z-index:150;display:flex;align-items:center;gap:8px;background:var(--em,#10b981);color:#fff;border:none;border-radius:999px;padding:12px 18px;font-weight:600;font-size:.88rem;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.support-fab:hover{filter:brightness(1.08)}
 </style>
 </head>
 <body>
+<button type="button" class="support-fab" onclick="openSupport()">💬 Support</button>
 
 <nav class="public-nav" id="publicNav">
   <div class="nav-logo"><div class="icon">🛡️</div>Auditor<span>IA</span></div>
@@ -520,7 +523,7 @@ function openSupport(){
   tawkLoaded=true;
   window.Tawk_API=window.Tawk_API||{};
   window.Tawk_LoadStart=new Date();
-  Tawk_API.onLoad=function(){Tawk_API.maximize()};
+  Tawk_API.onLoad=function(){Tawk_API.maximize();const fab=document.querySelector(".support-fab");if(fab)fab.style.display="none"};
   const sc=document.createElement("script");
   sc.async=true;
   sc.src="https://embed.tawk.to/"+encodeURIComponent(TAWK_PROPERTY_ID)+"/"+encodeURIComponent(TAWK_WIDGET_ID);
@@ -821,10 +824,26 @@ async function onUpload(files){
     }
   }
   if(done){
-    await fetch(API_BASE+"/analyze",{method:"POST",credentials:"include"}).catch(()=>{});
+    let created=[];
+    try{
+      const an=await fetch(API_BASE+"/analyze",{method:"POST",credentials:"include"});
+      const anData=await an.json().catch(()=>({}));
+      if(an.ok)created=anData.findings||[];
+    }catch(err){/* l'analyse reste tentée au prochain rafraîchissement automatique */}
     await refreshFindings();
     await refreshSummary();
-    showToast(fr?"Analyse terminée":"Analysis complete");
+
+    const nb=created.length;
+    const nbCritical=created.filter(f=>f.type==="critical").length;
+    if(nb===0){
+      showToast(fr?"Analyse terminée — aucune anomalie détectée":"Analysis complete — no anomalies detected");
+    }else{
+      showToast(fr
+        ? `Analyse terminée — ${nb} anomalie${nb>1?"s":""} détectée${nb>1?"s":""}${nbCritical?`, dont ${nbCritical} critique${nbCritical>1?"s":""}`:""}`
+        : `Analysis complete — ${nb} anomal${nb>1?"ies":"y"} detected${nbCritical?`, ${nbCritical} critical`:""}`);
+      // On amène directement le client devant les anomalies trouvées, au lieu de le laisser sur l'écran d'upload.
+      document.querySelector('.nav-item[data-page="alertes"]')?.click();
+    }
   }
   await checkSubscription(); // le compteur d'essais gratuits vient de bouger côté serveur
   if(fi)fi.value=""; // permet de re-sélectionner le même fichier
