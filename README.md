@@ -207,3 +207,4 @@ Limites à connaître :
   le flux cumulé décrit ci-dessus
 - Seuils de règles configurables par utilisateur (aujourd'hui en dur : 3%, 5000€, 30 jours...)
 - Pages `login.html` / `signup.html` autonomes si tu préfères des pages dédiées aux modales actuelles
+- Deployment
