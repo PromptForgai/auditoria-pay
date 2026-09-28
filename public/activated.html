@@ -27,13 +27,13 @@ p{color:#94a3b8;line-height:1.6;margin:0 0 16px}
   <div class="plan" id="planName"></div>
   <p class="status" id="status">This can take a few minutes to confirm on-chain.</p>
   <p id="msg">Please don't close this page yet.</p>
-  <a class="btn" href="app.html" id="dashBtn" style="display:none">Open dashboard</a>
+  <a class="btn" href="/" id="dashBtn" style="display:none">Open dashboard</a>
   <div class="note">Subscriptions are activated automatically as soon as the payment is confirmed by
   our server — this page only reflects that status, it never activates anything on its own.</div>
 </div>
 <script>
 (function(){
-  // API_BASE : laisse "" si ce Worker est sur le même domaine que le site (voir app.html).
+  // API_BASE : laisse "" si ce Worker est sur le même domaine que le site (voir index.html).
   var API_BASE = "";
   var params = new URLSearchParams(location.search);
   var orderId = params.get("order_id");
