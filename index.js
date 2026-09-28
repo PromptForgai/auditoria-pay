@@ -34,26 +34,47 @@ function base64ToText(base64) {
   return new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
 }
 
-// Envoi de l'email de réinitialisation via Resend (resend.com).
-// Sans RESEND_API_KEY, le lien est seulement écrit dans les logs du Worker : aucun email n'est envoyé.
+// Envoi de l'email de réinitialisation. Fournisseurs pris en charge, dans cet ordre :
+//  1. Brevo (BREVO_API_KEY + EMAIL_SENDER, l'adresse expéditrice validée dans Brevo)
+//  2. Resend (RESEND_API_KEY, EMAIL_FROM)
+// Sans aucune clé, le lien est seulement écrit dans les logs du Worker : aucun email n'est envoyé.
 // Le lien ouvre la page d'accueil, qui affiche le formulaire "nouveau mot de passe" (paramètre reset_token).
 async function sendResetEmail(env, toEmail, token) {
   const resetUrl = `${env.APP_URL}/?reset_token=${token}`;
-  if (!env.RESEND_API_KEY) {
-    console.log(`[dev] Lien de réinitialisation pour ${toEmail}: ${resetUrl}`);
+  const subject = 'Réinitialisation de votre mot de passe AuditorIA';
+  const html = `<p>Cliquez sur ce lien pour choisir un nouveau mot de passe (valable 1 heure) :</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>`;
+
+  if (env.BREVO_API_KEY && env.EMAIL_SENDER) {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sender: { name: 'AuditorIA', email: env.EMAIL_SENDER },
+        to: [{ email: toEmail }],
+        subject,
+        htmlContent: html
+      })
+    });
+    if (!res.ok) console.error('Échec envoi email Brevo:', res.status, await res.text());
     return;
   }
-  const emailRes = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: env.EMAIL_FROM || 'AuditorIA <onboarding@resend.dev>',
-      to: toEmail,
-      subject: 'Réinitialisation de votre mot de passe AuditorIA',
-      html: `<p>Cliquez sur ce lien pour choisir un nouveau mot de passe (valable 1 heure) :</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
-    })
-  });
-  if (!emailRes.ok) console.error('Échec envoi email Resend:', emailRes.status, await emailRes.text());
+
+  if (env.RESEND_API_KEY) {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: env.EMAIL_FROM || 'AuditorIA <onboarding@resend.dev>',
+        to: toEmail,
+        subject,
+        html
+      })
+    });
+    if (!res.ok) console.error('Échec envoi email Resend:', res.status, await res.text());
+    return;
+  }
+
+  console.log(`[dev] Lien de réinitialisation pour ${toEmail}: ${resetUrl}`);
 }
 
 // Vérifie la session réelle (cookie httpOnly) — remplace le X-User-Id de confiance.
