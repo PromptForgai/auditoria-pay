@@ -5,6 +5,8 @@
 //    sans ça, n'importe qui pourrait POST une fausse confirmation de paiement.
 // 3. Le statut d'abonnement et le quota d'essais gratuits sont stockés en D1, jamais dans le navigateur.
 
+import { HttpError } from './errors.js';
+
 const NP_API = "https://api.nowpayments.io/v1";
 
 const PLANS = {
@@ -18,8 +20,8 @@ export const DEMO_DURATION_MS = 15 * 60 * 1000; // 15 minutes, décomptées depu
 
 export async function createInvoice(db, userId, plan, successUrl, workerOrigin, apiKey, ipnSecret) {
   plan = (plan || "starter").toLowerCase();
-  if (!PLANS[plan]) throw new Error("plan invalide");
-  if (!apiKey) throw new Error("NOWPAYMENTS_API_KEY non configurée");
+  if (!PLANS[plan]) throw new HttpError(400, "plan invalide");
+  if (!apiKey) throw new Error("NOWPAYMENTS_API_KEY non configurée"); // erreur de config : journalisée, jamais montrée au client
 
   const orderId = `auditoria-${plan}-${crypto.randomUUID()}`;
   const payload = {
@@ -41,7 +43,10 @@ export async function createInvoice(db, userId, plan, successUrl, workerOrigin, 
     body: JSON.stringify(payload)
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.error || "Erreur NOWPayments");
+  if (!res.ok) {
+    console.error("Erreur NOWPayments:", res.status, JSON.stringify(data));
+    throw new HttpError(502, "Le service de paiement est indisponible, réessaie dans un instant.");
+  }
 
   // La commande est liée à user_id ici, côté serveur — le client ne peut jamais choisir
   // pour quel compte elle sera créditée.
@@ -82,26 +87,47 @@ export async function verifyIpnSignature(rawBody, signatureHeader, ipnSecret) {
 
 export async function handleIpn(db, rawBody, signatureHeader, ipnSecret) {
   const verified = await verifyIpnSignature(rawBody, signatureHeader, ipnSecret);
-  if (!verified) throw new Error("signature IPN invalide");
+  if (!verified) throw new HttpError(401, "signature IPN invalide");
 
   const body = JSON.parse(rawBody);
-  const status = (body.payment_status || body.status || "").toLowerCase();
+  const status = String(body.payment_status || body.status || "").toLowerCase();
   const orderId = body.order_id;
-  const okStatuses = ["finished", "confirmed", "partially_paid"];
-  if (!okStatuses.includes(status) || !orderId) return;
+
+  // "partially_paid" n'active plus rien : un paiement partiel ne doit pas débloquer 30 jours complets.
+  if (!["finished", "confirmed"].includes(status) || !orderId) return;
 
   const order = await db.prepare(`SELECT * FROM orders WHERE order_id = ?`).bind(orderId).first();
   if (!order) return; // commande inconnue : on n'active jamais un abonnement sans commande liée à un compte
+  const plan = PLANS[order.plan];
+  if (!plan) return;
 
-  await db.prepare(`UPDATE orders SET status = 'paid', paid_at = ? WHERE order_id = ?`)
-    .bind(Date.now(), orderId).run();
+  // Le montant doit correspondre au prix du plan (défense en profondeur, en plus de la signature).
+  if (body.price_amount != null && Number(body.price_amount) < plan.price) {
+    console.error("IPN ignoré : montant inférieur au prix du plan", orderId, body.price_amount);
+    return;
+  }
+  if (body.actually_paid != null && body.pay_amount != null && Number(body.actually_paid) < Number(body.pay_amount)) {
+    console.error("IPN ignoré : paiement incomplet", orderId, body.actually_paid, body.pay_amount);
+    return;
+  }
 
+  // Idempotence atomique : NOWPayments renvoie plusieurs IPN par paiement (confirmed, puis finished)
+  // et peut en rejouer. Seul le premier fait passer la commande à "paid" et crédite l'abonnement.
   const now = Date.now();
+  const claim = await db.prepare(
+    `UPDATE orders SET status = 'paid', paid_at = ? WHERE order_id = ? AND status != 'paid'`
+  ).bind(now, orderId).run();
+  if (!claim.meta.changes) return;
+
+  // Renouvellement anticipé du même plan : les 30 jours s'ajoutent à ce qui reste, on ne perd rien.
+  const existing = await db.prepare(`SELECT plan, expires_at FROM subscriptions WHERE user_id = ?`).bind(order.user_id).first();
+  const base = (existing && existing.plan === order.plan && existing.expires_at > now) ? existing.expires_at : now;
+
   await db.prepare(
     `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, updated_at)
      VALUES (?,?,?,0,?)
      ON CONFLICT(user_id) DO UPDATE SET plan = excluded.plan, expires_at = excluded.expires_at, updated_at = excluded.updated_at`
-  ).bind(order.user_id, order.plan, now + PLAN_DURATION_MS, now).run();
+  ).bind(order.user_id, order.plan, base + PLAN_DURATION_MS, now).run();
 }
 
 export async function getOrderStatus(db, orderId) {
@@ -115,7 +141,7 @@ export async function getSubscription(db, userId) {
   if (!sub) {
     const now = Date.now();
     await db.prepare(
-      `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, updated_at) VALUES (?,?,?,?,?)`
+      `INSERT OR IGNORE INTO subscriptions (user_id, plan, expires_at, free_analyses_used, updated_at) VALUES (?,?,?,?,?)`
     ).bind(userId, "free", null, 0, now).run();
     sub = { user_id: userId, plan: "free", expires_at: null, free_analyses_used: 0 };
   }
@@ -148,12 +174,26 @@ export async function getSubscription(db, userId) {
 
 // Vraie porte d'entrée avant chaque analyse — remplace useFreeAnalysis() côté client,
 // qui pouvait être contourné en modifiant le localStorage.
+// Renvoie { allowed, consumed } : consumed=true seulement si un essai GRATUIT a été décompté
+// (abonnement ou démo actifs = pas de décompte), ce qui permet de le rembourser proprement en cas d'échec.
 export async function consumeAnalysisCredit(db, userId) {
   const sub = await getSubscription(db, userId);
-  if (sub.active) return true;
-  if (sub.free_left <= 0) return false;
+  if (sub.active) return { allowed: true, consumed: false };
+  if (sub.free_left <= 0) return { allowed: false, consumed: false };
+
+  // Décompte atomique : la condition dans le WHERE empêche deux requêtes simultanées
+  // de dépasser FREE_LIMIT (le simple "lire puis écrire" d'avant le permettait).
+  const res = await db.prepare(
+    `UPDATE subscriptions SET free_analyses_used = free_analyses_used + 1, updated_at = ?
+     WHERE user_id = ? AND free_analyses_used < ?`
+  ).bind(Date.now(), userId, FREE_LIMIT).run();
+  if (!res.meta.changes) return { allowed: false, consumed: false };
+  return { allowed: true, consumed: true };
+}
+
+// Rend un essai gratuit quand l'analyse a échoué côté serveur (fichier illisible, IA indisponible...).
+export async function refundAnalysisCredit(db, userId) {
   await db.prepare(
-    `UPDATE subscriptions SET free_analyses_used = free_analyses_used + 1, updated_at = ? WHERE user_id = ?`
+    `UPDATE subscriptions SET free_analyses_used = MAX(free_analyses_used - 1, 0), updated_at = ? WHERE user_id = ?`
   ).bind(Date.now(), userId).run();
-  return true;
 }

@@ -5,17 +5,40 @@
 import { extractDocument } from './extraction.js';
 import { runAllRules } from './rules.js';
 import { getFullSummary } from './summary.js';
-import { createInvoice, handleIpn, getOrderStatus, getSubscription, consumeAnalysisCredit } from './payments.js';
+import { createInvoice, handleIpn, getOrderStatus, getSubscription, consumeAnalysisCredit, refundAnalysisCredit } from './payments.js';
 import {
-  signup, login, logout, requestPasswordReset, resetPassword,
+  signup, login, logout, requestPasswordReset, resetPassword, createSession,
   getUserIdFromSession, readSessionCookie, sessionCookieHeader, clearSessionCookieHeader
 } from './auth.js';
+import { HttpError } from './errors.js';
+import { hitRateLimit, clientIp, purgeRateLimits } from './ratelimit.js';
 
+const MINUTE = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
+
+// Limites d'upload. D1 refuse une ligne de plus de 2 Mo ; le base64 gonfle un fichier d'environ un tiers,
+// donc 1,4 Mo de fichier ≈ 1,87 Mo stockés. Au-delà, il faudrait passer par R2.
+const MAX_FILE_BYTES = 1_400_000;
+const ALLOWED_KINDS = ['invoice', 'purchase_order', 'contract', 'bank_statement'];
+const MAX_TRANSACTIONS = 1000;
+
+// Pas d'en-tête CORS : le site et l'API sont servis par le même Worker (même origine).
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', ...extraHeaders }
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...extraHeaders
+    }
   });
+}
+
+async function readJson(request) {
+  let body;
+  try { body = await request.json(); } catch { throw new HttpError(400, 'requête JSON invalide'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'requête JSON invalide');
+  return body;
 }
 
 // Encode par blocs de 8ko : String.fromCharCode(...bigArray) plante sur les gros fichiers
@@ -32,6 +55,11 @@ function arrayBufferToBase64(buffer) {
 
 function base64ToText(base64) {
   return new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
+}
+
+async function sha256Hex(buffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Envoi de l'email de réinitialisation. Fournisseurs pris en charge, dans cet ordre :
@@ -83,87 +111,166 @@ async function sendResetEmail(env, toEmail, token) {
 async function getUserId(request, env) {
   const token = readSessionCookie(request);
   const userId = await getUserIdFromSession(env.AUDITORIA_DB, token);
-  if (!userId) throw new Error('unauthenticated');
+  if (!userId) throw new HttpError(401, 'non authentifié');
   return userId;
 }
 
-async function normalizeAndStore(db, documentId, userId, kind, fields) {
-  // Range les champs extraits dans la table normalisée correspondante.
+// success_url vient du navigateur : on n'accepte que notre propre domaine (sinon la page de retour
+// de NOWPayments pourrait renvoyer le client vers un site tiers).
+function safeSuccessUrl(candidate, env) {
+  const fallback = `${env.APP_URL}/activated.html`;
+  if (typeof candidate !== 'string') return fallback;
+  try {
+    const u = new URL(candidate);
+    if (u.origin !== new URL(env.APP_URL).origin) return fallback;
+    return u.origin + u.pathname; // on jette la query/hash : createInvoice y ajoute order_id et plan
+  } catch {
+    return fallback;
+  }
+}
+
+// --- Normalisation des champs extraits par le modèle ---
+const str = v => (typeof v === 'string' && v.trim()) ? v.trim().slice(0, 300) : null;
+const normIban = v => { const s = str(v); return s ? s.replace(/\s+/g, '').toUpperCase() : null; };
+const normRef = v => { const s = str(v); return s ? s.toUpperCase() : null; };
+const normDate = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v.trim())) ? v.trim().slice(0, 10) : null;
+const normCur = v => (typeof v === 'string' && /^[A-Za-z]{3}$/.test(v.trim())) ? v.trim().toUpperCase() : 'EUR';
+const isNum = v => typeof v === 'number' && Number.isFinite(v);
+
+// Valide et range les champs extraits : renvoie la LISTE des instructions SQL à exécuter.
+// Elles partent toutes dans un seul db.batch() (transaction) : un document est importé en entier ou pas du tout,
+// et le nombre de requêtes D1 ne dépend pas du nombre de transactions.
+function buildStatements(db, documentId, userId, kind, fields) {
+  if (!fields || typeof fields !== 'object') throw new HttpError(422, "Aucune donnée exploitable n'a pu être extraite.");
+
   if (kind === 'invoice') {
-    await db.prepare(
+    if (!isNum(fields.amount)) throw new HttpError(422, 'Montant de la facture illisible : vérifie que le document est bien une facture.');
+    return [db.prepare(
       `INSERT INTO invoices (document_id, user_id, invoice_number, supplier_name, supplier_iban, po_number, amount, currency, invoice_date, due_date)
        VALUES (?,?,?,?,?,?,?,?,?,?)`
-    ).bind(documentId, userId, fields.invoice_number, fields.supplier_name, fields.supplier_iban,
-      fields.po_number, fields.amount, fields.currency || 'EUR', fields.invoice_date, fields.due_date).run();
-  } else if (kind === 'purchase_order') {
-    await db.prepare(
+    ).bind(documentId, userId, str(fields.invoice_number), str(fields.supplier_name), normIban(fields.supplier_iban),
+      normRef(fields.po_number), fields.amount, normCur(fields.currency), normDate(fields.invoice_date), normDate(fields.due_date))];
+  }
+
+  if (kind === 'purchase_order') {
+    if (!normRef(fields.po_number) || !isNum(fields.amount)) throw new HttpError(422, 'Numéro ou montant du bon de commande illisible.');
+    return [db.prepare(
       `INSERT INTO purchase_orders (document_id, user_id, po_number, supplier_name, amount, currency, order_date)
        VALUES (?,?,?,?,?,?,?)`
-    ).bind(documentId, userId, fields.po_number, fields.supplier_name, fields.amount, fields.currency || 'EUR', fields.order_date).run();
-  } else if (kind === 'contract') {
-    await db.prepare(
+    ).bind(documentId, userId, normRef(fields.po_number), str(fields.supplier_name), fields.amount, normCur(fields.currency), normDate(fields.order_date))];
+  }
+
+  if (kind === 'contract') {
+    return [db.prepare(
       `INSERT INTO contracts (document_id, user_id, supplier_name, contract_ref, amount, currency, start_date, end_date, auto_renew)
        VALUES (?,?,?,?,?,?,?,?,?)`
-    ).bind(documentId, userId, fields.supplier_name, fields.contract_ref, fields.amount, fields.currency || 'EUR',
-      fields.start_date, fields.end_date, fields.auto_renew ? 1 : 0).run();
-  } else if (kind === 'bank_statement') {
-    for (const tx of fields.transactions || []) {
-      await db.prepare(
-        `INSERT INTO bank_transactions (id, document_id, user_id, tx_date, amount, counterparty_name, counterparty_iban, label)
-         VALUES (?,?,?,?,?,?,?,?)`
-      ).bind(crypto.randomUUID(), documentId, userId, tx.tx_date, tx.amount, tx.counterparty_name, tx.counterparty_iban, tx.label).run();
+    ).bind(documentId, userId, str(fields.supplier_name), str(fields.contract_ref), isNum(fields.amount) ? fields.amount : null,
+      normCur(fields.currency), normDate(fields.start_date), normDate(fields.end_date), fields.auto_renew ? 1 : 0)];
+  }
 
-      // Alimente la liste des contreparties connues (sert à checkUnusualOutflows)
-      if (tx.counterparty_iban) {
-        await db.prepare(
-          `INSERT OR IGNORE INTO known_counterparties (user_id, iban, name, first_seen) VALUES (?,?,?,?)`
-        ).bind(userId, tx.counterparty_iban, tx.counterparty_name, tx.tx_date).run();
-      }
+  if (kind === 'bank_statement') {
+    const txs = (Array.isArray(fields.transactions) ? fields.transactions : [])
+      .map(tx => ({
+        date: normDate(tx && tx.tx_date),
+        amount: tx && tx.amount,
+        name: str(tx && tx.counterparty_name),
+        iban: normIban(tx && tx.counterparty_iban),
+        label: str(tx && tx.label)
+      }))
+      .filter(tx => tx.date && isNum(tx.amount)); // une date non ISO casserait strftime et toutes les requêtes du dashboard
+
+    if (!txs.length) throw new HttpError(422, 'Aucune transaction exploitable trouvée dans ce relevé.');
+    if (txs.length > MAX_TRANSACTIONS) throw new HttpError(413, `Relevé trop volumineux (${MAX_TRANSACTIONS} lignes maximum par fichier) : découpe-le par période.`);
+
+    // Insertions multi-lignes : 8 paramètres par ligne × 12 lignes = 96, sous la limite D1 de 100 paramètres par requête.
+    const statements = [];
+    for (let i = 0; i < txs.length; i += 12) {
+      const chunk = txs.slice(i, i + 12);
+      const placeholders = chunk.map(() => '(?,?,?,?,?,?,?,?)').join(',');
+      const params = chunk.flatMap(tx => [crypto.randomUUID(), documentId, userId, tx.date, tx.amount, tx.name, tx.iban, tx.label]);
+      statements.push(db.prepare(
+        `INSERT INTO bank_transactions (id, document_id, user_id, tx_date, amount, counterparty_name, counterparty_iban, label) VALUES ${placeholders}`
+      ).bind(...params));
     }
+    return statements;
+  }
+
+  throw new HttpError(400, 'type de document inconnu');
+}
+
+// Supprime un document dont l'extraction a échoué et rend l'essai gratuit consommé à l'upload.
+// La condition sur status garantit qu'on ne rembourse qu'une fois et qu'on ne touche jamais un document déjà extrait.
+async function discardFailedDocument(db, doc, userId) {
+  try {
+    const del = await db.prepare(
+      `DELETE FROM documents WHERE id = ? AND user_id = ? AND status = 'extracting'`
+    ).bind(doc.id, userId).run();
+    if (del.meta.changes && doc.credit_used) await refundAnalysisCredit(db, userId);
+  } catch (err) {
+    console.error('Échec du nettoyage après erreur d\'extraction:', err);
   }
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const db = env.AUDITORIA_DB;
+    const ip = clientIp(request);
 
     try {
       // --- Comptes ---
 
       // POST /auth/signup  {email, password}
       if (url.pathname === '/auth/signup' && request.method === 'POST') {
-        const { email, password } = await request.json();
-        const userId = await signup(env.AUDITORIA_DB, email, password);
-        const token = await login(env.AUDITORIA_DB, email, password);
+        // 5 inscriptions par IP et par jour : freine l'enchaînement de comptes jetables pour
+        // relancer la démo de 15 min et les essais gratuits en boucle.
+        if (await hitRateLimit(db, `signup:${ip}`, 5, DAY)) throw new HttpError(429, "Trop d'inscriptions depuis cette connexion. Réessaie demain.");
+        ctx.waitUntil(purgeRateLimits(db));
+        const { email, password } = await readJson(request);
+        const userId = await signup(db, email, password);
+        const token = await createSession(db, userId);
         return json({ user_id: userId }, 200, { 'Set-Cookie': sessionCookieHeader(token) });
       }
 
       // POST /auth/login  {email, password}
       if (url.pathname === '/auth/login' && request.method === 'POST') {
-        const { email, password } = await request.json();
-        const token = await login(env.AUDITORIA_DB, email, password);
+        const { email, password } = await readJson(request);
+        const emailKey = typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : '';
+        const tooMany =
+          (await hitRateLimit(db, `login-ip:${ip}`, 30, 15 * MINUTE)) ||
+          (await hitRateLimit(db, `login-email:${emailKey}`, 10, 15 * MINUTE));
+        if (tooMany) throw new HttpError(429, 'Trop de tentatives. Réessaie dans quelques minutes.');
+        const token = await login(db, email, password);
         return json({ ok: true }, 200, { 'Set-Cookie': sessionCookieHeader(token) });
       }
 
       // POST /auth/logout
       if (url.pathname === '/auth/logout' && request.method === 'POST') {
         const token = readSessionCookie(request);
-        await logout(env.AUDITORIA_DB, token);
+        await logout(db, token);
         return json({ ok: true }, 200, { 'Set-Cookie': clearSessionCookieHeader() });
       }
 
       // POST /auth/forgot-password  {email}
-      // Répond toujours "ok", que l'email existe ou non — ne révèle jamais quels comptes existent.
+      // Répond toujours "ok", que l'email existe ou non, et envoie l'email en arrière-plan :
+      // ni le message ni le temps de réponse ne révèlent quels comptes existent.
       if (url.pathname === '/auth/forgot-password' && request.method === 'POST') {
-        const { email } = await request.json();
-        await requestPasswordReset(env.AUDITORIA_DB, email, (to, token) => sendResetEmail(env, to, token));
+        if (await hitRateLimit(db, `forgot-ip:${ip}`, 5, HOUR)) throw new HttpError(429, 'Trop de demandes. Réessaie plus tard.');
+        const { email } = await readJson(request);
+        const emailKey = typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : '';
+        // Limite par adresse (3/h) : au-delà, on répond "ok" sans rien envoyer (pas d'inondation de la boîte d'un tiers).
+        if (!(await hitRateLimit(db, `forgot-email:${emailKey}`, 3, HOUR))) {
+          const reset = await requestPasswordReset(db, email);
+          if (reset) ctx.waitUntil(sendResetEmail(env, reset.email, reset.token));
+        }
         return json({ ok: true });
       }
 
       // POST /auth/reset-password  {token, new_password}
       if (url.pathname === '/auth/reset-password' && request.method === 'POST') {
-        const { token, new_password } = await request.json();
-        await resetPassword(env.AUDITORIA_DB, token, new_password);
+        if (await hitRateLimit(db, `reset-ip:${ip}`, 10, HOUR)) throw new HttpError(429, 'Trop de tentatives. Réessaie plus tard.');
+        const { token, new_password } = await readJson(request);
+        await resetPassword(db, token, new_password);
         return json({ ok: true });
       }
 
@@ -172,27 +279,31 @@ export default {
       // POST /create-invoice  {plan, success_url}  — protégé : la commande est liée au compte connecté
       if (url.pathname === '/create-invoice' && request.method === 'POST') {
         const userId = await getUserId(request, env);
-        const { plan, success_url } = await request.json();
-        const workerOrigin = new URL(request.url).origin;
+        if (await hitRateLimit(db, `invoice:${userId}`, 10, HOUR)) throw new HttpError(429, 'Trop de demandes de paiement. Réessaie plus tard.');
+        const { plan, success_url } = await readJson(request);
         const invoice = await createInvoice(
-          env.AUDITORIA_DB, userId, plan,
-          success_url || `${env.APP_URL}/activated.html`,
-          workerOrigin, env.NOWPAYMENTS_API_KEY, env.IPN_SECRET
+          db, userId, plan,
+          safeSuccessUrl(success_url, env),
+          url.origin, env.NOWPAYMENTS_API_KEY, env.IPN_SECRET
         );
         return json(invoice);
       }
 
       // POST /ipn — appelé par les serveurs NOWPayments, jamais par le navigateur du client.
-      // Toute requête sans signature HMAC valide est rejetée : c'est ce qui empêche quiconque
+      // Toute requête sans signature HMAC valide est rejetée (401) : c'est ce qui empêche quiconque
       // de POST une fausse confirmation de paiement pour s'activer gratuitement.
+      // Toute autre erreur (base indisponible...) renvoie 500 pour que NOWPayments RÉESSAIE l'envoi :
+      // avant, une panne passagère répondait 401 et le paiement pouvait ne jamais être crédité.
       if (url.pathname === '/ipn' && request.method === 'POST') {
         const rawBody = await request.text();
         const sig = request.headers.get('x-nowpayments-sig');
         try {
-          await handleIpn(env.AUDITORIA_DB, rawBody, sig, env.IPN_SECRET);
+          await handleIpn(db, rawBody, sig, env.IPN_SECRET);
           return new Response('OK', { status: 200 });
         } catch (err) {
-          return new Response(err.message, { status: 401 });
+          if (err instanceof HttpError) return new Response(err.message, { status: err.status });
+          console.error('Erreur IPN:', err);
+          return new Response('erreur interne', { status: 500 });
         }
       }
 
@@ -201,14 +312,14 @@ export default {
       // session pour cette route de polling public, mais elle ne renvoie que le statut, jamais de données de compte.
       if (url.pathname === '/status' && request.method === 'GET') {
         const orderId = url.searchParams.get('order_id');
-        if (!orderId) return json({ error: 'order_id requis' }, 400);
-        return json(await getOrderStatus(env.AUDITORIA_DB, orderId));
+        if (!orderId) throw new HttpError(400, 'order_id requis');
+        return json(await getOrderStatus(db, orderId));
       }
 
       // GET /subscription — seule source de vérité sur l'abonnement, jamais le localStorage du client.
       if (url.pathname === '/subscription' && request.method === 'GET') {
         const userId = await getUserId(request, env);
-        return json(await getSubscription(env.AUDITORIA_DB, userId));
+        return json(await getSubscription(db, userId));
       }
 
       // --- Documents & analyse (routes protégées) ---
@@ -216,25 +327,58 @@ export default {
       // POST /upload  — multipart/form-data: file, kind
       if (url.pathname === '/upload' && request.method === 'POST') {
         const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `upload:${userId}`, 60, HOUR)) throw new HttpError(429, "Trop d'envois en peu de temps. Réessaie plus tard.");
 
-        // Vérification réelle du quota AVANT tout traitement — c'est ici, pas dans le navigateur,
-        // que la limite gratuite / l'abonnement actif est appliquée.
-        const allowed = await consumeAnalysisCredit(env.AUDITORIA_DB, userId);
-        if (!allowed) return json({ error: 'free_limit_reached' }, 402);
-        const form = await request.formData();
+        // 1. Validation AVANT de toucher au quota : une requête invalide ne coûte plus un essai gratuit.
+        const declared = Number(request.headers.get('content-length') || 0);
+        if (declared > MAX_FILE_BYTES + 100_000) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+
+        let form;
+        try { form = await request.formData(); } catch { throw new HttpError(400, 'envoi invalide'); }
         const file = form.get('file');
         const kind = form.get('kind'); // invoice | purchase_order | contract | bank_statement
-        if (!file || !kind) return json({ error: 'file et kind requis' }, 400);
+        if (!file || typeof file === 'string' || typeof kind !== 'string') throw new HttpError(400, 'file et kind requis');
+        if (!ALLOWED_KINDS.includes(kind)) throw new HttpError(400, 'type de document inconnu');
+        if (file.size === 0) throw new HttpError(400, 'fichier vide');
+        if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
 
-        // Stockage direct en D1 (pas de R2 : R2 exige une carte bancaire/PayPal pour être activé,
-        // même en restant sous le tier gratuit — D1 n'a pas cette exigence). Limite pratique :
-        // pas adapté à de très gros fichiers/volumes, à revoir si R2 devient disponible plus tard.
+        const filename = String(file.name || 'document').slice(0, 200);
+        const ext = (filename.split('.').pop() || '').toLowerCase();
+        if (!['pdf', 'csv', 'txt'].includes(ext)) throw new HttpError(415, 'Formats acceptés : PDF, CSV.');
+        if (ext !== 'pdf' && kind !== 'bank_statement') throw new HttpError(415, 'Ce type de document doit être envoyé en PDF (le CSV est réservé aux relevés bancaires).');
+
+        const buffer = await file.arrayBuffer();
+        if (ext === 'pdf' && new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength))) !== '%PDF-') {
+          throw new HttpError(400, "Ce fichier n'est pas un PDF valide.");
+        }
+
+        // 2. Anti-doublon : le même fichier ne peut pas être importé deux fois (sinon un relevé réimporté
+        //    doublerait les transactions, fausserait la trésorerie et déclencherait de faux "paiements en double").
+        const contentHash = await sha256Hex(buffer);
+        const dup = await db.prepare(
+          `SELECT id, status FROM documents WHERE user_id = ? AND content_hash = ?`
+        ).bind(userId, contentHash).first();
+        if (dup) {
+          // envoi précédent interrompu avant l'extraction : on reprend ce document, sans nouveau décompte
+          if (dup.status === 'uploaded') return json({ document_id: dup.id, status: 'uploaded' });
+          throw new HttpError(409, 'Ce fichier a déjà été importé.');
+        }
+
+        // 3. Quota : décompté seulement maintenant, de façon atomique (voir payments.js).
+        const credit = await consumeAnalysisCredit(db, userId);
+        if (!credit.allowed) return json({ error: 'free_limit_reached' }, 402);
+
+        // Stockage direct en D1 (pas de R2 : R2 exige une carte bancaire/PayPal pour être activé).
         const documentId = crypto.randomUUID();
-        const contentBase64 = arrayBufferToBase64(await file.arrayBuffer());
-
-        await env.AUDITORIA_DB.prepare(
-          `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at) VALUES (?,?,?,?,?,?,?)`
-        ).bind(documentId, userId, kind, contentBase64, file.name, 'uploaded', Date.now()).run();
+        try {
+          await db.prepare(
+            `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at, credit_used, content_hash)
+             VALUES (?,?,?,?,?,?,?,?,?)`
+          ).bind(documentId, userId, kind, arrayBufferToBase64(buffer), filename, 'uploaded', Date.now(), credit.consumed ? 1 : 0, contentHash).run();
+        } catch (err) {
+          if (credit.consumed) await refundAnalysisCredit(db, userId);
+          throw err;
+        }
 
         return json({ document_id: documentId, status: 'uploaded' });
       }
@@ -244,60 +388,87 @@ export default {
         const userId = await getUserId(request, env);
         const documentId = url.pathname.split('/')[2];
 
-        const doc = await env.AUDITORIA_DB.prepare(
+        const doc = await db.prepare(
           `SELECT * FROM documents WHERE id = ? AND user_id = ?`
         ).bind(documentId, userId).first();
-        if (!doc) return json({ error: 'document introuvable' }, 404);
+        if (!doc) throw new HttpError(404, 'document introuvable');
 
-        const isPdf = doc.filename?.toLowerCase().endsWith('.pdf');
-        const input = isPdf
-          ? { pdfBase64: doc.content_base64 }
-          : { text: base64ToText(doc.content_base64) }; // CSV/texte
+        // Verrou atomique : un seul appel à la fois peut traiter ce document (double clic, deux onglets...).
+        const claim = await db.prepare(
+          `UPDATE documents SET status = 'extracting' WHERE id = ? AND user_id = ? AND status = 'uploaded'`
+        ).bind(documentId, userId).run();
+        if (!claim.meta.changes) throw new HttpError(409, 'document déjà traité ou en cours de traitement');
 
-        const fields = await extractDocument(doc.kind, input, env.GEMINI_API_KEY);
+        try {
+          const isPdf = doc.filename?.toLowerCase().endsWith('.pdf');
+          const input = isPdf
+            ? { pdfBase64: doc.content_base64 }
+            : { text: base64ToText(doc.content_base64) }; // CSV/texte
 
-        await env.AUDITORIA_DB.prepare(
-          `INSERT INTO extractions (document_id, kind, data_json) VALUES (?,?,?)`
-        ).bind(documentId, doc.kind, JSON.stringify(fields)).run();
+          const fields = await extractDocument(doc.kind, input, env.GEMINI_API_KEY);
+          const statements = buildStatements(db, documentId, userId, doc.kind, fields);
 
-        await normalizeAndStore(env.AUDITORIA_DB, documentId, userId, doc.kind, fields);
+          // Tout ou rien : extraction brute + lignes normalisées + statut "extracted" dans une seule transaction.
+          await db.batch([
+            db.prepare(`INSERT INTO extractions (document_id, kind, data_json) VALUES (?,?,?)`)
+              .bind(documentId, doc.kind, JSON.stringify(fields)),
+            ...statements,
+            db.prepare(`UPDATE documents SET status = 'extracted', extracted_at = ? WHERE id = ?`)
+              .bind(Date.now(), documentId)
+          ]);
+        } catch (err) {
+          await discardFailedDocument(db, doc, userId); // le client peut réessayer sans avoir perdu un essai
+          throw err;
+        }
 
-        await env.AUDITORIA_DB.prepare(
-          `UPDATE documents SET status = 'extracted', extracted_at = ? WHERE id = ?`
-        ).bind(Date.now(), documentId).run();
-
-        return json({ document_id: documentId, status: 'extracted', fields });
+        return json({ document_id: documentId, status: 'extracted' });
       }
 
-      // POST /analyze — relance toutes les règles pour l'utilisateur (à appeler après chaque extraction,
-      // ou en cron périodique pour les échéances de contrat)
+      // POST /analyze — relance toutes les règles pour l'utilisateur (à appeler après chaque extraction).
+      // Idempotent : un constat déjà existant n'est jamais recréé (voir fingerprint dans rules.js).
       if (url.pathname === '/analyze' && request.method === 'POST') {
         const userId = await getUserId(request, env);
-        const findings = await runAllRules(env.AUDITORIA_DB, userId);
+        if (await hitRateLimit(db, `analyze:${userId}`, 60, HOUR)) throw new HttpError(429, "Trop d'analyses en peu de temps. Réessaie plus tard.");
+        const findings = await runAllRules(db, userId);
         return json({ findings_created: findings.length, findings });
       }
 
-      // GET /findings — remplace le tableau baseAlerts codé en dur du frontend
+      // GET /findings — alertes ouvertes de l'utilisateur
       if (url.pathname === '/findings' && request.method === 'GET') {
         const userId = await getUserId(request, env);
-        const { results } = await env.AUDITORIA_DB.prepare(
+        const { results } = await db.prepare(
           `SELECT * FROM findings WHERE user_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 50`
         ).bind(userId).all();
         return json({ findings: results });
       }
 
-      // GET /summary — remplace les tableaux figés d'initCharts() : trésorerie, économies,
-      // flux entrants/sortants calculés à partir des vraies transactions et alertes stockées.
+      // POST /findings/:id/status  {status: 'reviewed' | 'dismissed' | 'open'}
+      // Permet de traiter une alerte (faux positif, déjà réglée). Elle ne réapparaît plus après un /analyze,
+      // et une alerte "dismissed" n'est plus comptée dans les économies du dashboard.
+      const statusMatch = url.pathname.match(/^\/findings\/([0-9a-f-]{36})\/status$/);
+      if (statusMatch && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        const { status } = await readJson(request);
+        if (!['open', 'reviewed', 'dismissed'].includes(status)) throw new HttpError(400, 'statut invalide');
+        const res = await db.prepare(`UPDATE findings SET status = ? WHERE id = ? AND user_id = ?`)
+          .bind(status, statusMatch[1], userId).run();
+        if (!res.meta.changes) throw new HttpError(404, 'alerte introuvable');
+        return json({ ok: true });
+      }
+
+      // GET /summary — trésorerie, économies, flux calculés à partir des vraies transactions et alertes stockées.
       if (url.pathname === '/summary' && request.method === 'GET') {
         const userId = await getUserId(request, env);
-        const summary = await getFullSummary(env.AUDITORIA_DB, userId);
-        return json(summary);
+        return json(await getFullSummary(db, userId));
       }
 
       return json({ error: 'not found' }, 404);
     } catch (err) {
-      if (err.message === 'unauthenticated') return json({ error: 'non authentifié' }, 401);
-      return json({ error: err.message }, 500);
+      // Erreurs "attendues" (validation, quota, session) : message montrable au client.
+      if (err instanceof HttpError) return json({ error: err.message }, err.status);
+      // Tout le reste (SQL, réseau, config) : détail dans les logs du Worker, message neutre côté client.
+      console.error('Erreur non gérée:', request.method, url.pathname, err);
+      return json({ error: 'erreur interne, réessaie dans un instant' }, 500);
     }
   }
 };

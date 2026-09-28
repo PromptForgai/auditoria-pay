@@ -1,210 +1,122 @@
 # AuditorIA — moteur réel
 
-Remplace les données fictives (`baseAlerts`, `liveAnomalies`, `initCharts`) du frontend par de vraies
-extractions IA + un moteur de règles déterministe.
+Un seul Worker Cloudflare (`auditoria-pay`) qui sert le site (`public/`), l'API (comptes, upload, extraction IA,
+règles de détection, résumé) et les paiements NOWPayments, avec une base D1.
+
+## Structure du projet
+
+```
+wrangler.toml      config (main = "index.js", assets = ./public, base D1)
+index.js           routes HTTP
+auth.js            comptes, sessions, mot de passe oublié
+payments.js        NOWPayments, abonnement, quota d'essais gratuits
+extraction.js      extraction Gemini (PDF/CSV → champs structurés)
+rules.js           moteur de règles déterministe
+summary.js         chiffres du dashboard
+errors.js          HttpError (erreurs montrables au client)
+ratelimit.js       limiteur de débit en D1
+schema.sql         schéma complet (base neuve)
+migration.sql      mise à jour d'une base déjà déployée
+public/
+  index.html       site + dashboard
+  activated.html   page de retour de paiement
+```
+
+Tous les fichiers `.js` sont à la racine, à côté de `wrangler.toml`. Les anciens `app.html` et `index-1.html` ne servent plus.
 
 ## Déploiement
 
+Base **déjà déployée** (ton cas) :
+
 ```bash
-npm install -g wrangler
-wrangler login
-
-wrangler d1 create auditoria_db
-# copier le database_id renvoyé dans wrangler.toml
-
-wrangler r2 bucket create auditoria-documents
-
-wrangler d1 execute auditoria_db --file=schema.sql
-
-wrangler secret put GEMINI_API_KEY
-# clé Gemini gratuite (aucune carte bancaire requise) : aistudio.google.com → "Get API key"
-
-wrangler secret put RESEND_API_KEY
-# (ou un autre fournisseur d'email — adapte sendResetEmail() dans index.js)
-# Ajoute aussi dans wrangler.toml : [vars] APP_URL = "https://tondomaine.com", EMAIL_FROM = "no-reply@tondomaine.com"
-
+wrangler d1 execute auditoria_db --remote --file=migration.sql   # une seule fois
 wrangler deploy
 ```
 
-## Isolation des données entre clients
+Base **neuve** :
 
-C'est la garantie centrale du système : **aucune requête ne fait confiance à un identifiant envoyé par le
-client.** `getUserId(request, env)` lit le cookie de session `httpOnly`, vérifie son hash en base
-(`sessions`), et c'est ce `user_id`-là — jamais un autre — qui filtre chaque `SELECT`/`INSERT` sur
-`documents`, `invoices`, `findings`, etc. Sans session valide, toute route de données renvoie 401.
-
-Points qui en découlent, à ne pas casser en modifiant le code plus tard :
-- Ne jamais réintroduire un `X-User-Id` ou un `user_id` lu depuis le body/query d'une requête publique.
-- Les mots de passe sont hashés (PBKDF2 + sel), jamais stockés en clair, jamais renvoyés par l'API.
-- Un changement de mot de passe invalide toutes les sessions existantes (`resetPassword` dans `auth.js`).
-- Les tokens de réinitialisation sont à usage unique et expirent après 1h.
-
-## Comptes (email + mot de passe, comme demandé)
-
-- `POST /auth/signup` `{email, password}` → crée le compte et connecte directement (cookie de session posé)
-- `POST /auth/login` `{email, password}`
-- `POST /auth/logout`
-- `POST /auth/forgot-password` `{email}` → envoie un lien si le compte existe (répond "ok" dans tous les cas,
-  pour ne jamais révéler quels emails sont inscrits)
-- `POST /auth/reset-password` `{token, new_password}`
-
-Il te reste à créer les pages `login.html`, `signup.html`, `reset-password.html` côté frontend
-(formulaires simples qui appellent ces routes) — dis-moi si tu veux que je les fasse à partir de ta
-maquette actuelle.
-
-Tu peux fusionner ce Worker avec ton Worker de paiement existant (`auditoria-pay`) :
-mêmes bindings D1/R2, mêmes routes `/create-invoice` et `/status` à côté de celles-ci.
-
-## Ce qui change côté frontend
-
-1. **Authentification réelle requise en premier.** Toutes les routes lisent `X-User-Id` dans les
-   en-têtes — aujourd'hui rien ne vérifie qu'un utilisateur est bien celui qu'il prétend être.
-   Il faut brancher un vrai système de compte (email + mot de passe hashé, session/JWT) avant
-   d'exposer ces routes publiquement, sinon n'importe qui peut lire les données de n'importe qui.
-
-2. **`onUpload()`** doit envoyer le fichier à `/upload` (avec le `kind` du document), puis appeler
-   `/extract/:id`, puis `/analyze`, puis rafraîchir via `/findings` — au lieu de choisir une alerte
-   au hasard dans `liveAnomalies`.
-
-3. **`renderAlerts()`** doit lire `GET /findings` au lieu du tableau `alerts` codé en dur.
-
-4. **`initCharts()`** : trésorerie et flux doivent être calculés à partir de `bank_transactions`
-   réellement stockées (somme des montants par mois), pas des tableaux `[900,980,1050,...]` fixes.
-   C'est une prochaine étape (agrégation SQL simple par mois) une fois les relevés bancaires
-   alimentés — dis-moi quand tu veux que je m'en occupe.
-
-## Ce qui est réel dès maintenant
-
-- Extraction : Gemini (gratuit, sans carte bancaire) lit chaque PDF/CSV et renvoie des champs factuels (montants, IBAN, dates,
-  numéros de facture/BC), jamais un jugement — c'est le moteur de règles qui compare.
-- Détection : 4 règles déterministes et vérifiables (`src/rules.js`) —
-  écart facture/BC, doublon de paiement, échéance de contrat, sortie vers IBAN inconnu.
-  Chaque alerte pointe vers les documents source (`related_document_ids`) pour audit.
-
-## Frontend mis à jour (`app.html`)
-
-`app.html` remplace ton `index.html` : mêmes styles et mise en page, mais :
-- Connexion, inscription et mot de passe oublié appellent réellement `/auth/login`,
-  `/auth/signup`, `/auth/forgot-password` (cookie de session `httpOnly`, jamais de mot de passe
-  pré-rempli).
-- `onUpload()` envoie le vrai fichier à `/upload` → `/extract/:id` → `/analyze`, puis rafraîchit
-  les alertes et les statistiques. Il n'y a plus d'anomalie choisie au hasard.
-- Un sélecteur de type de document (facture / bon de commande / contrat / relevé bancaire CSV)
-  précède la zone de dépôt — plus de fichier envoyé par défaut comme "contrat" quel que soit son
-  contenu réel.
-- Les alertes affichées viennent de `GET /findings` ; si le moteur n'a rien détecté, le tableau
-  de bord affiche "Aucune anomalie détectée" au lieu de données fictives.
-- Les cartes de stats et les 3 graphiques (trésorerie, économies, flux) viennent de `GET /summary`,
-  calculé en SQL à partir des vraies transactions et alertes — plus aucun chiffre codé en dur.
-- `API_BASE` en haut du script (const) : laisse `""` si le Worker est sur le même domaine que le
-  site, sinon mets l'URL complète du Worker déployé.
-- Corrigé au passage : un bug préexistant dans `goToNowPayments()` (regex mal échappées)
-  empêchait de construire correctement l'URL de retour après paiement.
-
-Renomme `app.html` en `index.html` une fois vérifié, à la place de l'ancien.
-
-## Définitions honnêtes des métriques (`src/summary.js`)
-
-Pour ne jamais réafficher un chiffre inventé sous une étiquette qui suggère autre chose :
-- **Trésorerie** = flux net cumulé depuis le premier relevé bancaire importé (somme de toutes
-  les transactions). Ce n'est PAS un solde bancaire en direct tant qu'aucune connexion Open
-  Banking n'est branchée — à clarifier auprès du client si le mot "trésorerie" doit rester tel quel.
-- **Économies réalisées** = montant total des écarts facture/BC et doublons de paiement détectés
-  (`invoice_po_mismatch`, `duplicate_payment`). C'est l'argent que l'audit a permis de repérer,
-  pas une confirmation que la somme a été effectivement récupérée ou évitée.
-- **Flux entrants/sortants** = sommes réelles du mois en cours sur `bank_transactions`.
-
-## Paiements NOWPayments — fusionnés depuis ton Worker existant
-
-Ton Worker `auditoria-pay` est maintenant intégré (`src/payments.js` + routes dans `src/index.js`) :
-`/create-invoice`, `/ipn`, `/status`, `/subscription`. Il faut donc **déployer un seul Worker**
-désormais (celui-ci), pas deux séparés — sinon les sessions/comptes et les paiements ne
-partageraient pas la même base D1.
-
-Secrets supplémentaires à configurer :
 ```bash
+wrangler d1 create auditoria_db        # puis copier le database_id dans wrangler.toml
+wrangler d1 execute auditoria_db --remote --file=schema.sql
+wrangler secret put GEMINI_API_KEY     # gratuit, sans carte : aistudio.google.com → Get API key
 wrangler secret put NOWPAYMENTS_API_KEY
 wrangler secret put IPN_SECRET
+# email de réinitialisation (optionnel) : BREVO_API_KEY + EMAIL_SENDER, ou RESEND_API_KEY + EMAIL_FROM
+wrangler deploy
 ```
-Et dans NOWPayments, configure l'URL d'IPN sur `https://tondomaine/ipn` (ou laisse le worker la
-définir automatiquement via `ipn_callback_url`, déjà géré dans `createInvoice`).
 
-### Faille corrigée : l'abonnement était activable sans payer
+**`--remote` est indispensable** : sans lui, wrangler modifie une base locale de test et la vraie reste inchangée.
+Il n'y a pas de bucket R2 à créer (les fichiers sont stockés en D1, voir plus bas).
 
-Deux problèmes dans le code d'origine permettaient de débloquer un abonnement complet
-gratuitement :
-1. Le statut d'abonnement (`getSub()`/`isPaidActive()`) était lu depuis `localStorage` — modifiable
-   depuis la console du navigateur par n'importe quel client.
-2. `activated.html` **activait l'abonnement même sans `order_id` dans l'URL, ou si la requête de
-   vérification échouait** (`catch(e){activate(plan)}`) — il suffisait d'ouvrir cette page
-   directement pour s'auto-activer.
+## Isolation des données entre clients
 
-Ce qui a changé :
-- Le statut d'abonnement vit uniquement en D1 (table `subscriptions`), lu via `GET /subscription`.
-  Le client ne peut plus rien modifier lui-même.
-- `/ipn` vérifie la signature HMAC-SHA512 envoyée par NOWPayments (`x-nowpayments-sig`) avant
-  d'activer quoi que ce soit — sans signature valide, la requête est rejetée.
-- Chaque facture (`/create-invoice`) est créée pour un `user_id` authentifié et enregistrée dans
-  la table `orders` ; `/ipn` ne peut activer que le compte lié à cette commande précise.
-- `activated.html` ne fait plus qu'afficher le statut lu sur `/status` — il n'y a plus aucun
-  chemin dans son code qui active un abonnement lui-même. Sans `order_id` valide et payé en base,
-  il affiche une erreur, jamais une activation.
-- La limite de 2 analyses gratuites est vérifiée dans `/upload` côté serveur
-  (`consumeAnalysisCredit`), qui renvoie 402 une fois épuisée — plus un contournement possible
-  en modifiant le navigateur.
-- Sur la page publique, cliquer "S'abonner" sans compte ouvre désormais l'inscription d'abord (la
-  facture doit être liée à un compte réel) ; une fois connecté, le paiement reprend automatiquement.
+Aucune requête ne fait confiance à un identifiant envoyé par le client. `getUserId()` lit le cookie de session
+`httpOnly`, vérifie son hash en base, et c'est ce `user_id` qui filtre chaque `SELECT`/`INSERT`. Sans session valide,
+toute route de données renvoie 401. À ne pas casser plus tard :
+- ne jamais lire un `user_id` depuis le body, la query ou un en-tête d'une requête publique ;
+- mots de passe en PBKDF2 + sel, jamais stockés ni renvoyés ; un changement de mot de passe ferme toutes les sessions ;
+- jetons de réinitialisation à usage unique (consommés atomiquement), valables 1 h, un seul actif par compte.
 
-## Mode démo automatique (15 minutes)
+## Routes
 
-Fini la demande de démo par email : dès l'inscription, le compte a un accès complet et illimité
-pendant 15 minutes (calculées côté serveur depuis `users.created_at`, jamais depuis le navigateur).
-`GET /subscription` renvoie `plan:"demo"` et `demo_ends_at` pendant cette fenêtre ; `/upload` ne
-consomme aucun crédit gratuit tant que le mode démo est actif. Le bandeau du dashboard affiche un
-vrai compte à rebours (mm:ss) et bascule automatiquement vers le plan gratuit (2 analyses) une fois
-les 15 minutes écoulées. Les anciens boutons "Book a demo" ouvrent maintenant directement
-l'inscription.
+| Route | Rôle |
+|---|---|
+| `POST /auth/signup`, `/auth/login`, `/auth/logout` | comptes |
+| `POST /auth/forgot-password`, `/auth/reset-password` | mot de passe oublié (répond « ok » que le compte existe ou non) |
+| `POST /create-invoice`, `POST /ipn`, `GET /status`, `GET /subscription` | paiements et abonnement |
+| `POST /upload` → `POST /extract/:id` → `POST /analyze` | dépôt, extraction IA, règles |
+| `GET /findings`, `POST /findings/:id/status` | alertes ; `status` = `reviewed` ou `dismissed` |
+| `GET /summary` | trésorerie, économies, flux |
 
-## Extraction IA : Gemini plutôt que Claude (vrai tier gratuit)
+## Règles de détection (`rules.js`)
 
-`src/extraction.js` appelle l'API **Gemini** (Google AI Studio), pas Claude — c'est le seul des
-grands fournisseurs à offrir un tier gratuit récurrent sans carte bancaire, plutôt qu'un simple
-crédit d'essai qui expire. Concrètement :
-- Clé : **aistudio.google.com** → *Get API key* → aucune carte requise pour le tier gratuit.
-- Modèle utilisé : `gemini-2.5-flash` (marqué gratuit sur la page de pricing Google au moment de
-  l'écriture) — vérifie sur `ai.google.dev/gemini-api/docs/pricing` que c'est toujours le cas, la
-  liste des modèles gratuits change avec le temps.
-- Limite réelle à connaître : le tier gratuit est **limité en débit** (quelques requêtes par
-  minute selon le modèle et le compte), pas juste en volume. Pour un usage en dessous de quelques
-  dizaines d'analyses par jour, ça passe largement ; si un client dépose 50 fichiers d'un coup,
-  certaines requêtes pourront être temporairement rejetées (erreur 429) — `/extract` renverra
-  alors une erreur explicite, à réessayer quelques secondes plus tard.
-- Les entrées/sorties du tier gratuit peuvent être utilisées par Google pour améliorer ses
-  modèles (contrairement au tier payant) — à mentionner à tes clients si la confidentialité des
-  documents financiers est un argument de vente, ou à activer la facturation dès que le budget
-  le permet pour lever cette limite.
+- **Écart facture / bon de commande** : facture et BC reliés par le numéro de BC, seuil 3 %, mêmes devises uniquement.
+- **Paiement en double** : même bénéficiaire, même montant, moins de 5 jours d'écart.
+- **Contrat à échéance** : moins de 30 jours.
+- **Sortie vers un IBAN inconnu** : sortie ≥ 5 000 € vers un IBAN qui ne figure ni sur une facture importée, ni dans
+  `known_counterparties`, ni dans une transaction plus ancienne. Seule la **première** apparition d'un IBAN est signalée.
+  Au premier import, tout gros virement vers un fournisseur sans facture correspondante sera donc signalé : c'est voulu,
+  l'utilisateur les passe en « Ignorer » ou importe les factures.
 
-## Stockage des fichiers : D1 plutôt que R2 (pas de carte bancaire nécessaire)
+Chaque constat a une empreinte (`findings.fingerprint`, index unique) : relancer `/analyze` ne crée jamais de doublon, et une
+alerte ignorée ne revient pas.
 
-Activer R2 chez Cloudflare exige de renseigner une carte bancaire ou un compte PayPal, même pour
-rester à 0€ (mesure anti-abus de Cloudflare). Ce n'est pas le cas de D1. En attendant d'avoir un
-moyen de paiement, les fichiers sont donc stockés **directement en base D1**, dans
-`documents.content_base64` — pas de bucket R2 à créer, pas de binding `AUDITORIA_BUCKET`.
+## Métriques du dashboard (`summary.js`)
 
-Limites à connaître :
-- Ne convient pas à de très gros fichiers ou très gros volumes (D1 a une limite de taille par
-  base) — suffisant pour démarrer avec des factures/contrats de quelques pages.
-- Le jour où tu as une carte (même virtuelle/prépayée) ou un compte PayPal : crée le bucket R2,
-  décommente le binding dans `wrangler.toml`, et redemande-moi de rebrancher le code dessus pour
-  les nouveaux documents (pas besoin de migrer les anciens, D1 continue de fonctionner).
+- **Trésorerie** = flux net cumulé depuis le premier relevé importé, pas un solde bancaire en direct.
+- **Économies** = doublons de paiement + **surfacturations** facture/BC détectés (une facture inférieure au BC n'est pas
+  une économie). Les alertes ignorées sont exclues. C'est de l'argent repéré, pas récupéré. « Économies (année) » cumule
+  depuis le 1er janvier.
+- **Flux entrants/sortants** = sommes réelles du mois en cours.
 
-## Ce qui reste ouvert
+## Paiements NOWPayments
 
-- Import CSV bancaire multi-formats (chaque banque a son propre format d'export — aujourd'hui le
-  CSV est envoyé tel quel à Gemini pour extraction, ce qui marche mais reste à valider sur de
-  vrais relevés)
-- Connexion Open Banking (Bridge, Powens...) si tu veux une vraie trésorerie en direct plutôt que
-  le flux cumulé décrit ci-dessus
-- Seuils de règles configurables par utilisateur (aujourd'hui en dur : 3%, 5000€, 30 jours...)
-- Pages `login.html` / `signup.html` autonomes si tu préfères des pages dédiées aux modales actuelles
-- Deployment
+- Le statut d'abonnement vit uniquement en D1, lu via `GET /subscription`.
+- `/ipn` vérifie la signature HMAC-SHA512, n'active que les statuts `finished` / `confirmed`, contrôle que le montant payé
+  couvre le prix du plan, et est **idempotent** (un IPN rejoué ne prolonge rien). Un paiement partiel n'active rien.
+- Un renouvellement du même plan avant expiration ajoute 30 jours à ce qui reste.
+- Une panne passagère renvoie 500 à NOWPayments, qui réessaie ; seule une signature invalide renvoie 401.
+- `success_url` est limité à ton domaine (`APP_URL`).
+- Quota gratuit : 2 analyses, décomptées de façon atomique à l'upload **après** validation du fichier, et remboursées si
+  l'extraction échoue. Mode démo : 15 min d'accès complet depuis la création du compte, calculées côté serveur.
+
+## Limites et sécurité
+
+- **Taille de fichier : 1,4 Mo maximum.** D1 refuse une ligne de plus de 2 Mo et le base64 gonfle d'un tiers. Au-delà,
+  il faut R2 (qui exige une carte bancaire ou PayPal chez Cloudflare).
+- **Relevés : 1 000 lignes maximum par fichier**, et un fichier trop long est refusé avec un message clair (avant, il était
+  tronqué en silence). Le même fichier ne peut pas être importé deux fois (SHA-256), ce qui évite de doubler les transactions.
+- **Gemini gratuit** : limité en débit (une 429 devient un « service saturé, réessaie » et l'essai est remboursé) et les
+  données du tier gratuit peuvent servir à améliorer les modèles de Google : à dire à tes clients.
+- **Limitation de débit** : login (10 essais/15 min par email, 30 par IP), inscription (5/jour par IP), mot de passe oublié,
+  reset, upload, analyse. Contrepartie connue : quelqu'un peut ralentir la connexion d'un email en le martelant.
+- **Pas de vérification d'email** à l'inscription : la limite par IP freine les comptes jetables, sans les empêcher.
+- Les erreurs internes (SQL, Gemini, config) sont écrites dans les logs du Worker (`[observability]` activé) et jamais
+  renvoyées au navigateur.
+- Le front échappe tout le texte issu de documents avant de l'afficher (un PDF piégé ne peut plus injecter de HTML).
+
+## Pistes non faites
+
+- R2 pour les gros fichiers ; vérification d'email ; bouton « faire confiance à cet IBAN » qui alimente
+  `known_counterparties` ; cron quotidien pour les échéances de contrat ; règle `invoice_drift` (prévue dans le schéma,
+  jamais implémentée).

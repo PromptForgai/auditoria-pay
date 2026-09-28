@@ -1,5 +1,7 @@
 -- AuditorIA — schéma D1 (moteur réel)
--- wrangler d1 execute auditoria_db --file=schema.sql
+-- Nouvelle base :   wrangler d1 execute auditoria_db --remote --file=schema.sql
+-- Base existante :  wrangler d1 execute auditoria_db --remote --file=migration.sql   (voir migration.sql)
+-- Sans --remote, wrangler agit sur une base LOCALE de test, pas sur celle de Cloudflare.
 
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY,              -- uuid
@@ -8,10 +10,13 @@ CREATE TABLE IF NOT EXISTS documents (
   content_base64 TEXT NOT NULL,     -- contenu brut du fichier, encodé en base64, stocké directement en D1
                                      -- (pas de R2 pour l'instant : R2 exige carte bancaire/PayPal, D1 non)
   filename TEXT,
-  status TEXT NOT NULL DEFAULT 'uploaded', -- uploaded | extracted | error
+  status TEXT NOT NULL DEFAULT 'uploaded', -- uploaded | extracting | extracted (un document dont l'extraction échoue est supprimé)
   uploaded_at INTEGER NOT NULL,
-  extracted_at INTEGER
+  extracted_at INTEGER,
+  credit_used INTEGER NOT NULL DEFAULT 0,  -- 1 si cet envoi a consommé un essai gratuit (pour le rembourser en cas d'échec)
+  content_hash TEXT                         -- SHA-256 du fichier : empêche d'importer deux fois le même document
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_hash ON documents(user_id, content_hash);
 
 CREATE TABLE IF NOT EXISTS extractions (
   document_id TEXT PRIMARY KEY REFERENCES documents(id),
@@ -120,7 +125,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   updated_at INTEGER NOT NULL
 );
 
--- Table des fournisseurs connus, construite au fil de l'eau (permet de détecter un IBAN "inconnu")
+-- IBAN de confiance déclarés pour un compte (jamais remplie automatiquement depuis un relevé : voir rules.js).
+-- Un IBAN est aussi considéré comme connu s'il figure sur une facture ou dans un relevé plus ancien.
 CREATE TABLE IF NOT EXISTS known_counterparties (
   user_id TEXT NOT NULL,
   iban TEXT NOT NULL,
@@ -140,6 +146,15 @@ CREATE TABLE IF NOT EXISTS findings (
   amount_impact REAL,                -- montant de l'écart détecté, si pertinent
   related_document_ids TEXT,         -- JSON array
   status TEXT NOT NULL DEFAULT 'open', -- open | reviewed | dismissed
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  fingerprint TEXT                   -- identifie le constat (règle + documents/transactions) : évite les doublons à chaque /analyze
 );
 CREATE INDEX IF NOT EXISTS idx_findings_user ON findings(user_id, status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_fingerprint ON findings(user_id, fingerprint);
+
+-- Limiteur de débit (connexion, inscription, mot de passe oublié, envois...) — voir ratelimit.js
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  window_start INTEGER NOT NULL
+);

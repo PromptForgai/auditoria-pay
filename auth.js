@@ -4,9 +4,14 @@
 // - Session : token aléatoire renvoyé au client dans un cookie httpOnly ; seul son hash SHA-256 est stocké en base
 // - Reset password : même principe de token à usage unique, courte durée de vie (1h)
 
-const PBKDF2_ITERATIONS = 100_000;
+import { HttpError } from './errors.js';
+
+const PBKDF2_ITERATIONS = 100_000; // maximum accepté par Cloudflare Workers
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
 const RESET_TOKEN_DURATION_MS = 60 * 60 * 1000; // 1 heure
+const MAX_EMAIL = 254;
+const MAX_PASSWORD = 200; // évite qu'un mot de passe géant serve à saturer le CPU
+const DUMMY_SALT = '00'.repeat(16);
 
 function toHex(buffer) {
   return [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -42,34 +47,50 @@ async function verifyPassword(password, storedHash, storedSalt) {
 }
 
 function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  return email.length <= MAX_EMAIL && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function checkNewPassword(password) {
+  if (typeof password !== 'string' || password.length < 10) throw new HttpError(400, 'mot de passe trop court (10 caractères minimum)');
+  if (password.length > MAX_PASSWORD) throw new HttpError(400, `mot de passe trop long (${MAX_PASSWORD} caractères maximum)`);
 }
 
 export async function signup(db, email, password) {
+  if (typeof email !== 'string' || typeof password !== 'string') throw new HttpError(400, 'email et mot de passe requis');
   email = email.trim().toLowerCase();
-  if (!isValidEmail(email)) throw new Error('email invalide');
-  if (!password || password.length < 10) throw new Error('mot de passe trop court (10 caractères minimum)');
+  if (!isValidEmail(email)) throw new HttpError(400, 'email invalide');
+  checkNewPassword(password);
 
   const existing = await db.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
-  if (existing) throw new Error('un compte existe déjà avec cet email');
+  if (existing) throw new HttpError(409, 'un compte existe déjà avec cet email');
 
   const { hash, salt } = await hashPassword(password);
   const userId = crypto.randomUUID();
-  await db.prepare(
-    `INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?,?,?,?,?)`
-  ).bind(userId, email, hash, salt, Date.now()).run();
-
+  try {
+    await db.prepare(
+      `INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?,?,?,?,?)`
+    ).bind(userId, email, hash, salt, Date.now()).run();
+  } catch (err) {
+    // deux inscriptions simultanées avec le même email : la contrainte UNIQUE tranche
+    if (/UNIQUE/i.test(String(err.message))) throw new HttpError(409, 'un compte existe déjà avec cet email');
+    throw err;
+  }
   return userId;
 }
 
 export async function login(db, email, password) {
+  const bad = () => new HttpError(401, 'email ou mot de passe incorrect');
+  if (typeof email !== 'string' || typeof password !== 'string' || password.length > MAX_PASSWORD) throw bad();
   email = email.trim().toLowerCase();
   const user = await db.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
-  // Message identique que l'email existe ou non : évite de révéler quels emails sont inscrits
-  if (!user) throw new Error('email ou mot de passe incorrect');
+  if (!user) {
+    // Même coût CPU que pour un vrai compte : sans ça, la durée de la réponse révèle quels emails existent.
+    await hashPassword(password, DUMMY_SALT);
+    throw bad();
+  }
 
   const ok = await verifyPassword(password, user.password_hash, user.password_salt);
-  if (!ok) throw new Error('email ou mot de passe incorrect');
+  if (!ok) throw bad();
 
   return createSession(db, user.id);
 }
@@ -78,6 +99,7 @@ export async function createSession(db, userId) {
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
+  await db.prepare(`DELETE FROM sessions WHERE expires_at < ?`).bind(now).run(); // ménage des sessions expirées
   await db.prepare(
     `INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)`
   ).bind(tokenHash, userId, now, now + SESSION_DURATION_MS).run();
@@ -100,40 +122,50 @@ export async function logout(db, token) {
   await db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).bind(tokenHash).run();
 }
 
-export async function requestPasswordReset(db, email, sendEmail) {
+// Crée un jeton de réinitialisation et le renvoie ({email, token}), ou null si le compte n'existe pas.
+// La route HTTP répond "ok" dans les deux cas et envoie l'email en arrière-plan (waitUntil) :
+// ni le message ni la durée de la réponse ne révèlent si le compte existe.
+export async function requestPasswordReset(db, email) {
+  if (typeof email !== 'string') return null;
   email = email.trim().toLowerCase();
   const user = await db.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
-  // On répond "ok" dans tous les cas côté route HTTP, qu'un compte existe ou non (voir index.js),
-  // pour ne pas révéler quels emails sont inscrits. Ici on n'envoie l'email que s'il existe vraiment.
-  if (!user) return;
+  if (!user) return null;
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
+  await db.prepare(`DELETE FROM password_reset_tokens WHERE expires_at < ?`).bind(now).run();
+  // un seul lien valide à la fois : les précédents sont invalidés
+  await db.prepare(`UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0`).bind(user.id).run();
   await db.prepare(
     `INSERT INTO password_reset_tokens (token_hash, user_id, created_at, expires_at, used) VALUES (?,?,?,?,0)`
   ).bind(tokenHash, user.id, now, now + RESET_TOKEN_DURATION_MS).run();
 
-  await sendEmail(email, token);
+  return { email, token };
 }
 
 export async function resetPassword(db, token, newPassword) {
-  if (!newPassword || newPassword.length < 10) throw new Error('mot de passe trop court (10 caractères minimum)');
+  checkNewPassword(newPassword);
+  const invalid = () => new HttpError(400, 'lien de réinitialisation invalide ou expiré');
+  if (typeof token !== 'string' || !token) throw invalid();
 
   const tokenHash = await sha256Hex(token);
   const reset = await db.prepare(
     `SELECT * FROM password_reset_tokens WHERE token_hash = ?`
   ).bind(tokenHash).first();
+  if (!reset) throw invalid();
 
-  if (!reset || reset.used || reset.expires_at < Date.now()) {
-    throw new Error('lien de réinitialisation invalide ou expiré');
-  }
+  // Le jeton est "consommé" d'abord, de façon atomique : deux requêtes simultanées avec le même
+  // lien ne peuvent pas réussir toutes les deux.
+  const claim = await db.prepare(
+    `UPDATE password_reset_tokens SET used = 1 WHERE token_hash = ? AND used = 0 AND expires_at > ?`
+  ).bind(tokenHash, Date.now()).run();
+  if (!claim.meta.changes) throw invalid();
 
   const { hash, salt } = await hashPassword(newPassword);
   await db.prepare(`UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?`)
     .bind(hash, salt, reset.user_id).run();
 
-  await db.prepare(`UPDATE password_reset_tokens SET used = 1 WHERE token_hash = ?`).bind(tokenHash).run();
   // Invalide toutes les sessions existantes après un changement de mot de passe
   await db.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(reset.user_id).run();
 }

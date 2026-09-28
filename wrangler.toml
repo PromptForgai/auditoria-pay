@@ -19,11 +19,19 @@ database_id = "067dfe5b-d3f0-4092-8e48-ad44551297de"
 # binding = "AUDITORIA_BUCKET"
 # bucket_name = "auditoria-documents"        # `wrangler r2 bucket create auditoria-documents`
 
+# Logs du Worker visibles dans le dashboard Cloudflare (les erreurs détaillées y sont écrites,
+# elles ne sont plus renvoyées au navigateur).
+[observability]
+enabled = true
+
 # Secrets, ne pas mettre en clair ici :
 # wrangler secret put GEMINI_API_KEY
 # wrangler secret put NOWPAYMENTS_API_KEY
 # wrangler secret put IPN_SECRET
-# (RESEND_API_KEY optionnel, pour l'email de réinitialisation de mot de passe)
+# Email de réinitialisation (optionnel, un seul des deux suffit) :
+#   Brevo  : wrangler secret put BREVO_API_KEY  + variable EMAIL_SENDER (adresse expéditrice validée dans Brevo)
+#   Resend : wrangler secret put RESEND_API_KEY + variable EMAIL_FROM ci-dessous
+# Sans aucune clé d'email, le lien de réinitialisation est seulement écrit dans les logs du Worker.
 
 [vars]
 APP_URL = "https://auditoria-pay.promptforgeai.workers.dev"
