@@ -27,3 +27,7 @@ database_id = "067dfe5b-d3f0-4092-8e48-ad44551297de"
 
 [vars]
 APP_URL = "https://auditoria-pay.promptforgeai.workers.dev"
+# Expéditeur des emails de réinitialisation (Resend). onboarding@resend.dev fonctionne sans domaine,
+# mais Resend n'envoie alors qu'à l'adresse de ton propre compte Resend. Pour écrire à tes clients,
+# vérifie un domaine à toi dans Resend puis mets ici par ex. "AuditorIA <no-reply@tondomaine.com>".
+EMAIL_FROM = "AuditorIA <onboarding@resend.dev>"

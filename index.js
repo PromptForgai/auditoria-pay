@@ -1,6 +1,6 @@
-// index.js — Worker principal du moteur réel AuditorIA
-// À fusionner avec ton Worker existant auditoria-pay (mêmes bindings D1/R2, même domaine).
-// Toutes les routes exigent un userId authentifié — adapte getUserId() à ton système de login.
+// index.js — Worker principal AuditorIA : comptes, paiements NOWPayments, analyse de documents.
+// Sert aussi le site (dossier public/) via [assets] dans wrangler.toml.
+// Les routes de données exigent une session valide (cookie httpOnly) : voir getUserId().
 
 import { extractDocument } from './extraction.js';
 import { runAllRules } from './rules.js';
@@ -34,24 +34,26 @@ function base64ToText(base64) {
   return new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
 }
 
-// Envoi d'email — branche un vrai fournisseur (Resend, Postmark...) avant la prod.
-// Sans clé configurée, le lien est juste loggé (utile en dev, jamais suffisant en prod).
+// Envoi de l'email de réinitialisation via Resend (resend.com).
+// Sans RESEND_API_KEY, le lien est seulement écrit dans les logs du Worker : aucun email n'est envoyé.
+// Le lien ouvre la page d'accueil, qui affiche le formulaire "nouveau mot de passe" (paramètre reset_token).
 async function sendResetEmail(env, toEmail, token) {
-  const resetUrl = `${env.APP_URL}/reset-password.html?token=${token}`;
+  const resetUrl = `${env.APP_URL}/?reset_token=${token}`;
   if (!env.RESEND_API_KEY) {
     console.log(`[dev] Lien de réinitialisation pour ${toEmail}: ${resetUrl}`);
     return;
   }
-  await fetch('https://api.resend.com/emails', {
+  const emailRes = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: env.EMAIL_FROM,
+      from: env.EMAIL_FROM || 'AuditorIA <onboarding@resend.dev>',
       to: toEmail,
       subject: 'Réinitialisation de votre mot de passe AuditorIA',
       html: `<p>Cliquez sur ce lien pour choisir un nouveau mot de passe (valable 1 heure) :</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
     })
   });
+  if (!emailRes.ok) console.error('Échec envoi email Resend:', emailRes.status, await emailRes.text());
 }
 
 // Vérifie la session réelle (cookie httpOnly) — remplace le X-User-Id de confiance.
