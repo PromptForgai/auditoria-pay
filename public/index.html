@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AuditorIA — AI Financial Audit & Accounting Software for SMEs</title>
-<meta name="description" content="AuditorIA detects billing gaps, contract risks and treasury anomalies. Detect billing gaps, contract risks and treasury anomalies from your own documents.">
+<meta name="description" content="AuditorIA detects billing gaps, contract risks and treasury anomalies from your own documents.">
 <meta name="keywords" content="financial audit software, accounting software SME, AI financial analysis, anomaly detection finance, treasury management, contract management software, billing discrepancy detection, cash flow monitoring, corporate finance dashboard">
 <meta name="robots" content="index, follow">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='9' fill='%2310b981'/%3E%3Ctext x='18' y='25' font-family='Arial,sans-serif' font-size='19' font-weight='700' fill='white' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
@@ -429,6 +430,7 @@ footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border
         <div class="form-group" style="max-width:320px;margin-bottom:14px">
           <label data-i18n="doc_kind_label">Document type</label>
           <select id="docKindSelect" style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:.9rem">
+            <option value="auto" data-i18n="doc_kind_auto">Automatic detection (recommended)</option>
             <option value="contract" data-i18n="doc_kind_contract">Contract</option>
             <option value="invoice" data-i18n="doc_kind_invoice">Invoice</option>
             <option value="purchase_order" data-i18n="doc_kind_po">Purchase order</option>
@@ -447,14 +449,9 @@ footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border
         </div>
         <table class="contracts-table">
           <thead><tr><th data-i18n="th_contract">Contract</th><th data-i18n="th_vendor">Vendor</th><th data-i18n="th_amount">Annual amount</th><th data-i18n="th_expiry">Expiry</th><th data-i18n="th_status">Status</th></tr></thead>
-          <tbody>
-            <tr><td>Cloud Infrastructure</td><td>AWS Europe</td><td>€ 48,000</td><td>15 Nov 2026</td><td><span class="badge badge-warning" data-i18n="status_expiry">Expiring soon</span></td></tr>
-            <tr><td>SaaS CRM License</td><td>Salesforce</td><td>€ 22,800</td><td>02 Mar 2027</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
-            <tr><td>IT Maintenance</td><td>TechSupport SA</td><td>€ 15,600</td><td>30 Sep 2026</td><td><span class="badge badge-critical" data-i18n="status_renegotiate">To renegotiate</span></td></tr>
-            <tr><td>Cyber Insurance</td><td>AXA Corporate</td><td>€ 9,200</td><td>12 Jan 2027</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
-            <tr><td>Office Lease</td><td>Paris Real Estate</td><td>€ 84,000</td><td>01 Jun 2028</td><td><span class="badge badge-info" data-i18n="status_active">Active</span></td></tr>
-          </tbody>
+          <tbody id="contractsTableBody"></tbody>
         </table>
+        <p id="contractsEmpty" style="color:var(--muted);font-size:.85rem;padding:16px 0;display:none"></p>
       </div>
       <div class="page" id="page-flux">
         <div class="stats-grid">
@@ -502,8 +499,8 @@ footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border
 
 <script>
 const i18n={
-en:{nav_features:"Features",nav_pricing:"Pricing",nav_security:"Security",login:"Log in",book_demo:"Start free — 5 documents",hero_badge:"AI-powered financial intelligence",hero_title:"Detect financial anomalies<br><span>before they cost you</span>",hero_proof:"Upload your invoices, contracts and bank statements and get alerts you can verify.",hero_sub:"AuditorIA analyses your contracts, invoices and bank statements and flags billing gaps, duplicate payments and expiring contracts.",cta_demo:"Start free — 5 documents",cta_pricing:"View pricing",trust_aes:"HTTPS encryption",trust_gdpr:"Data isolated per account",trust_eu:"Hashed passwords",trust_invoice:"Invoice available",features_title:"Built for finance directors",features_sub:"Real-time monitoring, automatic anomaly detection, secure contract management.",feat1_t:"Treasury dashboard",feat1_d:"Cash inflows and outflows computed from the bank statements you import.",feat2_t:"Contract tracking",feat2_d:"Upload your contracts as PDFs. Automatic alerts before they expire.",feat3_t:"AI anomaly detection",feat3_d:"Billing gaps, double payments, unusual transfers — checked each time you upload a document.",feat4_t:"Savings detection",feat4_d:"Flags gaps between invoices and purchase orders, and payments made twice.",feat5_t:"Security basics",feat5_d:"HTTPS in transit, hashed passwords, and strict separation of each account's data.",feat6_t:"Real-time alerts",feat6_d:"Critical and warning alerts as soon as an analysis finds an anomaly.",pricing_title:"Simple monthly pricing. Cancel anytime.",pricing_sub:"Enterprise plans for SMEs that need control over contracts and cash.",per_month:"/ month",starter_desc:"Small SME — up to 50 tracked contracts",growth_desc:"Established SME — unlimited contracts + AI alerts",f1:"Up to 50 contracts",f2:"Automatic expiry alerts",f3:"Treasury dashboard",f4:"Secure document deposit",f5:"Email support",f6:"Per-account data isolation",f7:"Unlimited contracts",f8:"Alerts on unusual outflows",f9:"Billing discrepancy detection",f10:"Duplicate payment detection",f11:"Bank statement import (PDF or CSV)",f12:"Dedicated account manager",f13:"Priority support",subscribe:"Subscribe",pay_note:"Payment by bank transfer or crypto (USDT TRC20 / BTC / ETH). Invoice available.",accepted:"Accepted: Bank transfer · USDT (TRC20) · BTC · ETH · Invoice on request",sec_title:"Built for trust",sec_p1:"Companies do not entrust financial data to amateur tools. AuditorIA is designed to look and behave like the systems your finance team already relies on.",sec_p2:"Every document is encrypted at rest and in transit. Access is logged. No data is sold or shared with third parties.",sec_l1:"HTTPS encryption in transit",sec_l2:"Passwords hashed · each account sees only its own data",sec_l3:"Documents are analysed by a third-party AI service (Google Gemini)",sec_l4:"Payments handled by NOWPayments: no card data on our side",sec_card_t:"Your data stays yours",sec_card_d:"We process data only to deliver the service. No training on your contracts. No resale. Export or delete everything at any time.",footer:"Enterprise financial intelligence.",login_title:"Sign in to AuditorIA",login_sub:"Access your financial intelligence dashboard",email:"Email",password:"Password",sign_in:"Sign in",demo_hint:"Demo: use the pre-filled credentials",close:"Close",demo_title:"Book a 15-minute demo",demo_sub:"We walk through your use case and show how AuditorIA detects gaps on your contracts and cash flows.",company:"Company",send_request:"Send request",crypto_title:"Complete your subscription",crypto_desc:"Secure checkout via NOWPayments. Bank transfer / invoice: write to Promptforgai@gmail.com.",pay_now:"Continue to payment",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contracts",nav_cashflow:"Bank Flows",nav_alerts:"Alerts",settings_label:"Settings",nav_settings:"Settings",topbar_sub:"Financial health overview",logout:"Log out",stat_treasury:"Treasury",stat_savings:"Savings realized",stat_in:"Inflows",stat_out:"Outflows",vs_prev:"vs previous month",chart_treasury:"Treasury evolution (6 months)",alerts_title:"Alerts & anomalies",chart_savings:"Savings realized",upload_title:"Secure deposit zone",upload_h:"Upload PDF contracts",upload_p:"Drag & drop or click · PDF or CSV",upload_desc:"Drag PDF or CSV files here · Sent over HTTPS · Analysed by a third-party AI service",th_contract:"Contract",th_vendor:"Vendor",th_amount:"Annual amount",th_expiry:"Expiry",th_status:"Status",status_expiry:"Expiring soon",status_active:"Active",status_renegotiate:"To renegotiate",inflows:"Inflows this month",outflows:"Outflows this month",net_balance:"Net balance",anomalies:"Anomalies",chart_cashflow:"Cash flow (30 days)",all_alerts:"All alerts",settings_soon:"Account settings available after full subscription activation.",new_anomaly:"New anomaly detected",titles:{dashboard:"Dashboard",contrats:"Contracts",flux:"Bank Flows",alertes:"Alerts",params:"Settings"}},
-fr:{nav_features:"Fonctionnalités",nav_pricing:"Tarifs",nav_security:"Sécurité",login:"Connexion",book_demo:"Démarrer gratuitement — 5 documents offerts",hero_badge:"Intelligence financière propulsée par l'IA",hero_title:"Détectez les anomalies financières<br><span>avant qu'elles ne coûtent</span>",hero_proof:"Déposez vos factures, contrats et relevés et obtenez des alertes vérifiables.",hero_sub:"AuditorIA analyse vos contrats, factures et relevés bancaires et signale écarts de facturation, doubles paiements et contrats arrivant à échéance.",cta_demo:"Démarrer gratuitement — 5 documents offerts",cta_pricing:"Voir les tarifs",trust_aes:"Chiffrement HTTPS",trust_gdpr:"Données isolées par compte",trust_eu:"Mots de passe hashés",trust_invoice:"Facture disponible",features_title:"Conçu pour les directions financières",features_sub:"Surveillance temps réel, détection d'anomalies, gestion sécurisée des contrats.",feat1_t:"Tableau de trésorerie",feat1_d:"Flux entrants et sortants calculés à partir des relevés bancaires que vous importez.",feat2_t:"Suivi des contrats",feat2_d:"Déposez vos contrats en PDF. Alertes automatiques avant leur échéance.",feat3_t:"Détection d'anomalies IA",feat3_d:"Écarts de facturation, doubles paiements, virements inhabituels — vérifiés à chaque document déposé.",feat4_t:"Détection d'économies",feat4_d:"Repère les écarts entre factures et bons de commande, et les paiements effectués deux fois.",feat5_t:"Sécurité de base",feat5_d:"HTTPS en transit, mots de passe hashés et séparation stricte des données de chaque compte.",feat6_t:"Alertes temps réel",feat6_d:"Alertes critiques et d'avertissement dès qu'une analyse détecte une anomalie.",pricing_title:"Tarif mensuel simple. Résiliable à tout moment.",pricing_sub:"Plans entreprise pour PME qui veulent maîtriser contrats et cash.",per_month:"/ mois",starter_desc:"Petite PME — jusqu'à 50 contrats suivis",growth_desc:"PME établie — contrats illimités + alertes IA",f1:"Jusqu'à 50 contrats",f2:"Alertes d'échéance automatiques",f3:"Tableau de bord trésorerie",f4:"Dépôt sécurisé de documents",f5:"Support par email",f6:"Données isolées par compte",f7:"Contrats illimités",f8:"Alertes sur les sorties inhabituelles",f9:"Détection d'écarts de facturation",f10:"Détection des paiements en double",f11:"Import de relevés bancaires (PDF ou CSV)",f12:"Account manager dédié",f13:"Support prioritaire",subscribe:"S'abonner",pay_note:"Paiement par virement ou crypto (USDT TRC20 / BTC / ETH). Facture disponible.",accepted:"Acceptés : virement bancaire · USDT (TRC20) · BTC · ETH · Facture sur demande",sec_title:"Conçu pour la confiance",sec_p1:"Une entreprise ne confie pas ses données financières à un outil amateur.",sec_p2:"Chaque document est chiffré. Aucune donnée n'est vendue.",sec_l1:"Chiffrement HTTPS en transit",sec_l2:"Mots de passe hashés · chaque compte ne voit que ses données",sec_l3:"Les documents sont analysés par un service d'IA tiers (Google Gemini)",sec_l4:"Paiements gérés par NOWPayments : aucune donnée de carte chez nous",sec_card_t:"Vos données restent les vôtres",sec_card_d:"Traitement uniquement pour le service. Pas d'entraînement sur vos contrats. Pas de revente.",footer:"Intelligence financière d'entreprise.",login_title:"Connexion à AuditorIA",login_sub:"Accédez à votre tableau de bord",email:"E-mail",password:"Mot de passe",sign_in:"Se connecter",demo_hint:"Démo : identifiants pré-remplis",close:"Fermer",demo_title:"Réserver une démo de 15 minutes",demo_sub:"Nous parcourons votre cas d'usage et montrons comment AuditorIA détecte les écarts.",company:"Entreprise",send_request:"Envoyer la demande",crypto_title:"Finaliser l'abonnement",crypto_desc:"Paiement sécurisé via NOWPayments. Virement / facture : écrivez à Promptforgai@gmail.com.",pay_now:"Continuer vers le paiement",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contrats",nav_cashflow:"Flux Bancaires",nav_alerts:"Alertes",settings_label:"Paramètres",nav_settings:"Paramètres",topbar_sub:"Aperçu de la santé financière",logout:"Déconnexion",stat_treasury:"Trésorerie",stat_savings:"Économies réalisées",stat_in:"Flux entrants",stat_out:"Flux sortants",vs_prev:"vs mois précédent",chart_treasury:"Évolution de la trésorerie (6 mois)",alerts_title:"Alertes & anomalies",chart_savings:"Économies réalisées",upload_title:"Zone de dépôt sécurisée",upload_h:"Téléversez vos contrats PDF",upload_p:"Glissez-déposez ou cliquez · PDF ou CSV",upload_desc:"Glissez vos fichiers PDF ou CSV ici · Envoi en HTTPS · Analysés par un service d'IA tiers",th_contract:"Contrat",th_vendor:"Fournisseur",th_amount:"Montant annuel",th_expiry:"Échéance",th_status:"Statut",status_expiry:"Échéance proche",status_active:"Actif",status_renegotiate:"À renégocier",inflows:"Entrées ce mois",outflows:"Sorties ce mois",net_balance:"Solde net",anomalies:"Anomalies",chart_cashflow:"Flux de trésorerie (30 jours)",all_alerts:"Toutes les alertes",settings_soon:"Paramètres disponibles après activation de l'abonnement.",settings_account:"Compte",settings_email:"Email",settings_plan:"Plan",settings_password:"Changer le mot de passe",settings_current_pw:"Mot de passe actuel",settings_new_pw:"Nouveau mot de passe (10 caractères minimum)",settings_save_pw:"Mettre à jour",settings_lang:"Langue",settings_pw_updated:"Mot de passe mis à jour.",settings_pw_mismatch:"Mot de passe actuel incorrect.",settings_pw_short:"Le nouveau mot de passe doit faire au moins 10 caractères.",settings_pw_error:"Erreur : ",new_anomaly:"Nouvelle anomalie détectée",titles:{dashboard:"Tableau de bord",contrats:"Contrats",flux:"Flux Bancaires",alertes:"Alertes",params:"Paramètres"}}
+en:{nav_features:"Features",nav_pricing:"Pricing",nav_security:"Security",login:"Log in",book_demo:"Start free — 5 documents",hero_badge:"AI-powered financial intelligence",hero_title:"Detect financial anomalies<br><span>before they cost you</span>",hero_proof:"Upload your invoices, contracts and bank statements and get alerts you can verify.",hero_sub:"AuditorIA analyses your contracts, invoices and bank statements and flags billing gaps, duplicate payments and expiring contracts.",cta_demo:"Start free — 5 documents",cta_pricing:"View pricing",trust_aes:"HTTPS encryption",trust_gdpr:"Data isolated per account",trust_eu:"Hashed passwords",trust_invoice:"Invoice available",features_title:"Built for finance directors",features_sub:"Real-time monitoring, automatic anomaly detection, secure contract management.",feat1_t:"Treasury dashboard",feat1_d:"Cash inflows and outflows computed from the bank statements you import.",feat2_t:"Contract tracking",feat2_d:"Upload your contracts as PDFs. Automatic alerts before they expire.",feat3_t:"AI anomaly detection",feat3_d:"Billing gaps, double payments, unusual transfers — checked each time you upload a document.",feat4_t:"Savings detection",feat4_d:"Flags gaps between invoices and purchase orders, and payments made twice.",feat5_t:"Security basics",feat5_d:"HTTPS in transit, hashed passwords, and strict separation of each account's data.",feat6_t:"Real-time alerts",feat6_d:"Critical and warning alerts as soon as an analysis finds an anomaly.",pricing_title:"Simple monthly pricing. Cancel anytime.",pricing_sub:"Enterprise plans for SMEs that need control over contracts and cash.",per_month:"/ month",starter_desc:"Small SME — up to 50 tracked contracts",growth_desc:"Established SME — unlimited contracts + AI alerts",f1:"Up to 50 contracts",f2:"Automatic expiry alerts",f3:"Treasury dashboard",f4:"Secure document deposit",f5:"Email support",f6:"Per-account data isolation",f7:"Unlimited contracts",f8:"Alerts on unusual outflows",f9:"Billing discrepancy detection",f10:"Duplicate payment detection",f11:"Bank statement import (PDF or CSV)",f12:"Dedicated account manager",f13:"Priority support",subscribe:"Subscribe",pay_note:"Payment by bank transfer or crypto (USDT TRC20 / BTC / ETH). Invoice available.",accepted:"Accepted: Bank transfer · USDT (TRC20) · BTC · ETH · Invoice on request",sec_title:"Built for trust",sec_p1:"Companies do not entrust financial data to amateur tools. AuditorIA is designed to look and behave like the systems your finance team already relies on.",sec_p2:"Every document is encrypted at rest and in transit. Access is logged. No data is sold or shared with third parties.",sec_l1:"HTTPS encryption in transit",sec_l2:"Passwords hashed · each account sees only its own data",sec_l3:"Documents are analysed by a third-party AI service (Google Gemini)",sec_l4:"Payments handled by NOWPayments: no card data on our side",sec_card_t:"Your data stays yours",sec_card_d:"We process data only to deliver the service. No training on your contracts. No resale. Export or delete everything at any time.",footer:"Enterprise financial intelligence.",login_title:"Sign in to AuditorIA",login_sub:"Access your financial intelligence dashboard",email:"Email",password:"Password",sign_in:"Sign in",demo_hint:"Demo: use the pre-filled credentials",close:"Close",demo_title:"Book a 15-minute demo",demo_sub:"We walk through your use case and show how AuditorIA detects gaps on your contracts and cash flows.",company:"Company",send_request:"Send request",crypto_title:"Complete your subscription",crypto_desc:"Secure checkout via NOWPayments. Bank transfer / invoice: write to Promptforgai@gmail.com.",pay_now:"Continue to payment",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contracts",nav_cashflow:"Bank Flows",nav_alerts:"Alerts",settings_label:"Settings",nav_settings:"Settings",topbar_sub:"Financial health overview",logout:"Log out",stat_treasury:"Treasury",stat_savings:"Savings realized",stat_in:"Inflows",stat_out:"Outflows",vs_prev:"vs previous month",chart_treasury:"Treasury evolution (6 months)",alerts_title:"Alerts & anomalies",chart_savings:"Savings realized",upload_title:"Secure deposit zone",upload_h:"Upload PDF contracts",upload_p:"Drag & drop or click · PDF or CSV",upload_desc:"Drag PDF or CSV files here · Sent over HTTPS · Analysed by a third-party AI service",th_contract:"Contract",th_vendor:"Vendor",th_amount:"Annual amount",th_expiry:"Expiry",th_status:"Status",status_expiry:"Expiring soon",status_active:"Active",status_renegotiate:"To renegotiate",inflows:"Inflows this month",outflows:"Outflows this month",net_balance:"Net balance",anomalies:"Anomalies",chart_cashflow:"Cash flow (30 days)",all_alerts:"All alerts",settings_soon:"Account settings available after full subscription activation.",settings_account:"Account",settings_email:"Email",settings_plan:"Plan",settings_password:"Change password",settings_current_pw:"Current password",settings_new_pw:"New password (10 characters minimum)",settings_save_pw:"Update password",settings_lang:"Language",settings_pw_updated:"Password updated.",settings_pw_mismatch:"Current password is incorrect.",settings_pw_short:"New password must be at least 10 characters.",settings_pw_error:"Error: ",doc_kind_label:"Document type",doc_kind_auto:"Automatic detection (recommended)",doc_kind_contract:"Contract",doc_kind_invoice:"Invoice",doc_kind_po:"Purchase order",doc_kind_bank:"Bank statement (CSV)",new_anomaly:"New anomaly detected",titles:{dashboard:"Dashboard",contrats:"Contracts",flux:"Bank Flows",alertes:"Alerts",params:"Settings"}},
+fr:{nav_features:"Fonctionnalités",nav_pricing:"Tarifs",nav_security:"Sécurité",login:"Connexion",book_demo:"Démarrer gratuitement — 5 documents offerts",hero_badge:"Intelligence financière propulsée par l'IA",hero_title:"Détectez les anomalies financières<br><span>avant qu'elles ne coûtent</span>",hero_proof:"Déposez vos factures, contrats et relevés et obtenez des alertes vérifiables.",hero_sub:"AuditorIA analyse vos contrats, factures et relevés bancaires et signale écarts de facturation, doubles paiements et contrats arrivant à échéance.",cta_demo:"Démarrer gratuitement — 5 documents offerts",cta_pricing:"Voir les tarifs",trust_aes:"Chiffrement HTTPS",trust_gdpr:"Données isolées par compte",trust_eu:"Mots de passe hashés",trust_invoice:"Facture disponible",features_title:"Conçu pour les directions financières",features_sub:"Surveillance temps réel, détection d'anomalies, gestion sécurisée des contrats.",feat1_t:"Tableau de trésorerie",feat1_d:"Flux entrants et sortants calculés à partir des relevés bancaires que vous importez.",feat2_t:"Suivi des contrats",feat2_d:"Déposez vos contrats en PDF. Alertes automatiques avant leur échéance.",feat3_t:"Détection d'anomalies IA",feat3_d:"Écarts de facturation, doubles paiements, virements inhabituels — vérifiés à chaque document déposé.",feat4_t:"Détection d'économies",feat4_d:"Repère les écarts entre factures et bons de commande, et les paiements effectués deux fois.",feat5_t:"Sécurité de base",feat5_d:"HTTPS en transit, mots de passe hashés et séparation stricte des données de chaque compte.",feat6_t:"Alertes temps réel",feat6_d:"Alertes critiques et d'avertissement dès qu'une analyse détecte une anomalie.",pricing_title:"Tarif mensuel simple. Résiliable à tout moment.",pricing_sub:"Plans entreprise pour PME qui veulent maîtriser contrats et cash.",per_month:"/ mois",starter_desc:"Petite PME — jusqu'à 50 contrats suivis",growth_desc:"PME établie — contrats illimités + alertes IA",f1:"Jusqu'à 50 contrats",f2:"Alertes d'échéance automatiques",f3:"Tableau de bord trésorerie",f4:"Dépôt sécurisé de documents",f5:"Support par email",f6:"Données isolées par compte",f7:"Contrats illimités",f8:"Alertes sur les sorties inhabituelles",f9:"Détection d'écarts de facturation",f10:"Détection des paiements en double",f11:"Import de relevés bancaires (PDF ou CSV)",f12:"Account manager dédié",f13:"Support prioritaire",subscribe:"S'abonner",pay_note:"Paiement par virement ou crypto (USDT TRC20 / BTC / ETH). Facture disponible.",accepted:"Acceptés : virement bancaire · USDT (TRC20) · BTC · ETH · Facture sur demande",sec_title:"Conçu pour la confiance",sec_p1:"Une entreprise ne confie pas ses données financières à un outil amateur.",sec_p2:"Chaque document est chiffré. Aucune donnée n'est vendue.",sec_l1:"Chiffrement HTTPS en transit",sec_l2:"Mots de passe hashés · chaque compte ne voit que ses données",sec_l3:"Les documents sont analysés par un service d'IA tiers (Google Gemini)",sec_l4:"Paiements gérés par NOWPayments : aucune donnée de carte chez nous",sec_card_t:"Vos données restent les vôtres",sec_card_d:"Traitement uniquement pour le service. Pas d'entraînement sur vos contrats. Pas de revente.",footer:"Intelligence financière d'entreprise.",login_title:"Connexion à AuditorIA",login_sub:"Accédez à votre tableau de bord",email:"E-mail",password:"Mot de passe",sign_in:"Se connecter",demo_hint:"Démo : identifiants pré-remplis",close:"Fermer",demo_title:"Réserver une démo de 15 minutes",demo_sub:"Nous parcourons votre cas d'usage et montrons comment AuditorIA détecte les écarts.",company:"Entreprise",send_request:"Envoyer la demande",crypto_title:"Finaliser l'abonnement",crypto_desc:"Paiement sécurisé via NOWPayments. Virement / facture : écrivez à Promptforgai@gmail.com.",pay_now:"Continuer vers le paiement",menu:"Menu",nav_dashboard:"Dashboard",nav_contracts:"Contrats",nav_cashflow:"Flux Bancaires",nav_alerts:"Alertes",settings_label:"Paramètres",nav_settings:"Paramètres",topbar_sub:"Aperçu de la santé financière",logout:"Déconnexion",stat_treasury:"Trésorerie",stat_savings:"Économies réalisées",stat_in:"Flux entrants",stat_out:"Flux sortants",vs_prev:"vs mois précédent",chart_treasury:"Évolution de la trésorerie (6 mois)",alerts_title:"Alertes & anomalies",chart_savings:"Économies réalisées",upload_title:"Zone de dépôt sécurisée",upload_h:"Téléversez vos contrats PDF",upload_p:"Glissez-déposez ou cliquez · PDF ou CSV",upload_desc:"Glissez vos fichiers PDF ou CSV ici · Envoi en HTTPS · Analysés par un service d'IA tiers",th_contract:"Contrat",th_vendor:"Fournisseur",th_amount:"Montant annuel",th_expiry:"Échéance",th_status:"Statut",status_expiry:"Échéance proche",status_active:"Actif",status_renegotiate:"À renégocier",inflows:"Entrées ce mois",outflows:"Sorties ce mois",net_balance:"Solde net",anomalies:"Anomalies",chart_cashflow:"Flux de trésorerie (30 jours)",all_alerts:"Toutes les alertes",settings_soon:"Paramètres disponibles après activation de l'abonnement.",settings_account:"Compte",settings_email:"Email",settings_plan:"Plan",settings_password:"Changer le mot de passe",settings_current_pw:"Mot de passe actuel",settings_new_pw:"Nouveau mot de passe (10 caractères minimum)",settings_save_pw:"Mettre à jour",settings_lang:"Langue",settings_pw_updated:"Mot de passe mis à jour.",settings_pw_mismatch:"Mot de passe actuel incorrect.",settings_pw_short:"Le nouveau mot de passe doit faire au moins 10 caractères.",settings_pw_error:"Erreur : ",doc_kind_label:"Type de document",doc_kind_auto:"Détection automatique (recommandé)",doc_kind_contract:"Contrat",doc_kind_invoice:"Facture",doc_kind_po:"Bon de commande",doc_kind_bank:"Relevé bancaire (CSV)",new_anomaly:"Nouvelle anomalie détectée",titles:{dashboard:"Tableau de bord",contrats:"Contrats",flux:"Flux Bancaires",alertes:"Alertes",params:"Paramètres"}}
 };
 
 let currentLang="en",chartsReady=false,anomalyTimer=null,anomalyIndex=0,currentUserLoggedIn=false,pendingPlan=null;
@@ -538,7 +535,7 @@ function openSupport(){
 }
 const FREE_LIMIT=5,MONTH_MS=30*24*60*60*1000;
 
-function setLang(lang){currentLang=lang;document.documentElement.lang=lang;document.getElementById("langSelect").value=lang;const a=document.getElementById("appLang");if(a)a.value=lang;document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.getAttribute("data-i18n");if(i18n[lang][k]!==undefined)el.innerHTML=i18n[lang][k]});const ap=document.querySelector(".nav-item.active")?.dataset.page;if(ap&&i18n[lang].titles[ap])document.getElementById("page-title").textContent=i18n[lang].titles[ap];renderAlerts();updateSubUI()}
+function setLang(lang){currentLang=lang;document.documentElement.lang=lang;document.getElementById("langSelect").value=lang;const a=document.getElementById("appLang");if(a)a.value=lang;document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.getAttribute("data-i18n");if(i18n[lang][k]!==undefined)el.innerHTML=i18n[lang][k]});const ap=document.querySelector(".nav-item.active")?.dataset.page;if(ap&&i18n[lang].titles[ap])document.getElementById("page-title").textContent=i18n[lang].titles[ap];renderAlerts();renderContracts();updateSubUI()}
 function openLogin(){document.getElementById("loginModal").classList.add("open")}
 function closeLogin(){document.getElementById("loginModal").classList.remove("open")}
 function openSignup(){document.getElementById("signupModal").classList.add("open")}
@@ -557,7 +554,9 @@ function fillSettingsPage(){
   if(!emailEl)return;
   const fr=currentLang==="fr",s=currentSub||{};
   emailEl.textContent=(currentUser&&currentUser.email)||"—";
-  planEl.textContent=s.active?(String(s.plan||"").charAt(0).toUpperCase()+String(s.plan||"").slice(1))
+  const planName=String(s.plan||"").charAt(0).toUpperCase()+String(s.plan||"").slice(1);
+  planEl.textContent=s.active
+    ?(planName+((typeof s.plan_limit==="number")?(fr?` — ${s.plan_left}/${s.plan_limit} document(s) ce mois-ci`:` — ${s.plan_left}/${s.plan_limit} document(s) this month`):(fr?" — illimité":" — unlimited")))
     :s.expired?(fr?"Abonnement expiré":"Subscription expired")
     :(fr?`Gratuit — ${typeof s.free_left==="number"?s.free_left:FREE_LIMIT} document(s) restant(s)`:`Free — ${typeof s.free_left==="number"?s.free_left:FREE_LIMIT} document(s) left`);
 }
@@ -585,6 +584,7 @@ async function enterApp(){
   document.getElementById("app").classList.add("visible");
   initCharts();
   await refreshFindings();
+  await refreshContracts();
   startAnomalyDetection();
   await checkSubscription();
   const ub=document.getElementById("subUpgradeBtn");
@@ -693,7 +693,15 @@ function updateSubUI(){
   updateUserChip();
   const s=currentSub,banner=document.getElementById("subBanner"),text=document.getElementById("subStatusText"),btn=document.getElementById("subUpgradeBtn");
   if(!banner||!text)return;
-  if(s.active){const days=Math.max(0,Math.ceil((s.expires_at-Date.now())/(24*60*60*1000)));banner.className="sub-banner ok";text.textContent=currentLang==="fr"?`Abonnement ${s.plan} actif — ${days} j restants`:`${s.plan} active — ${days} days left`;if(btn)btn.style.display="none"}
+  if(s.active){
+    const days=Math.max(0,Math.ceil((s.expires_at-Date.now())/(24*60*60*1000)));
+    const fr=currentLang==="fr";
+    const planName=String(s.plan||"").charAt(0).toUpperCase()+String(s.plan||"").slice(1);
+    const quota=(typeof s.plan_limit==="number")?(fr?` — ${s.plan_left}/${s.plan_limit} document(s) ce mois-ci`:` — ${s.plan_left}/${s.plan_limit} document(s) this month`):"";
+    banner.className="sub-banner ok";
+    text.textContent=(fr?`Abonnement ${planName} actif — ${days} j restants`:`${planName} active — ${days} days left`)+quota;
+    if(btn)btn.style.display="none";
+  }
   else if(s.expired){banner.className="sub-banner expired";text.textContent=currentLang==="fr"?"Abonnement expiré":"Subscription expired";if(btn){btn.style.display="";btn.textContent=currentLang==="fr"?"Renouveler":"Renew"}}
   else{
     banner.className="sub-banner free";
@@ -733,7 +741,7 @@ function showToast(msg){document.getElementById("toastMsg").textContent=msg;cons
 // Repasse périodiquement sur le serveur pour rafraîchir les vraies alertes (remplace l'ancienne
 // injection aléatoire d'anomalies fictives). Le moteur de règles tourne côté serveur (POST /analyze),
 // typiquement déclenché après chaque upload et/ou par un cron pour les échéances de contrat.
-function startAnomalyDetection(){anomalyTimer=setInterval(()=>{refreshFindings();refreshSummary()},28000)}
+function startAnomalyDetection(){anomalyTimer=setInterval(()=>{refreshFindings();refreshSummary();refreshContracts()},28000)}
 function stopAnomalyDetection(){if(anomalyTimer)clearInterval(anomalyTimer)}
 let chartInstances={};
 function fmtEUR(n){return new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(n||0)}
@@ -795,6 +803,48 @@ async function refreshFindings(){
     renderAlerts();
   }catch(err){alerts=[];renderAlerts()}
 }
+let contracts=[];
+function contractStatus(endDate){
+  const fr=currentLang==="fr";
+  if(!endDate) return {cls:"badge-info",label:fr?"Actif":"Active"};
+  const days=Math.ceil((new Date(endDate).getTime()-Date.now())/86400000);
+  if(days<0) return {cls:"badge-critical",label:fr?"Expiré":"Expired"};
+  if(days<=7) return {cls:"badge-critical",label:fr?"À renégocier":"To renegotiate"};
+  if(days<=30) return {cls:"badge-warning",label:fr?"Échéance proche":"Expiring soon"};
+  return {cls:"badge-info",label:fr?"Actif":"Active"};
+}
+function fmtContractDate(d){
+  if(!d)return "—";
+  const dt=new Date(d+"T00:00:00");
+  if(isNaN(dt.getTime()))return d;
+  return dt.toLocaleDateString(currentLang==="fr"?"fr-FR":"en-US",{day:"2-digit",month:"short",year:"numeric"});
+}
+function renderContracts(){
+  const body=document.getElementById("contractsTableBody"),empty=document.getElementById("contractsEmpty");
+  if(!body)return;
+  const fr=currentLang==="fr";
+  if(!contracts.length){
+    body.innerHTML="";
+    if(empty){empty.style.display="";empty.textContent=fr?"Aucun contrat importé pour l'instant.":"No contract imported yet."}
+    return;
+  }
+  if(empty)empty.style.display="none";
+  // Tout le texte affiché vient de documents importés (donnée non fiable) : passé par esc() avant insertion.
+  body.innerHTML=contracts.map(c=>{
+    const st=contractStatus(c.end_date);
+    const amount=(typeof c.amount==="number")?`${c.currency||"EUR"} ${c.amount.toLocaleString(fr?"fr-FR":"en-US")}`:"—";
+    return `<tr><td>${esc(c.contract_ref||(fr?"Contrat":"Contract"))}</td><td>${esc(c.supplier_name||"—")}</td><td>${esc(amount)}</td><td>${esc(fmtContractDate(c.end_date))}</td><td><span class="badge ${st.cls}">${esc(st.label)}</span></td></tr>`;
+  }).join("");
+}
+async function refreshContracts(){
+  try{
+    const res=await fetch(API_BASE+"/contracts",{credentials:"include"});
+    if(!res.ok){contracts=[];renderContracts();return}
+    const data=await res.json();
+    contracts=data.contracts||[];
+    renderContracts();
+  }catch(err){contracts=[];renderContracts()}
+}
 
 function setUploadProgress(i,total,label){
   const box=document.getElementById("uploadProgress"),bar=document.getElementById("uploadProgressBar"),
@@ -812,7 +862,7 @@ async function onUpload(files){
   files=Array.from(files||[]);
   if(!files.length)return;
   const sel=document.getElementById("docKindSelect");
-  const kind=(sel?sel.value:null)||"contract";
+  const kind=(sel?sel.value:null)||"auto";
   const fr=currentLang==="fr";
   let done=0,errorCount=0;
   const total=files.length;
@@ -826,10 +876,16 @@ async function onUpload(files){
       form.append("kind",kind);
       const up=await fetch(API_BASE+"/upload",{method:"POST",credentials:"include",body:form});
       if(up.status===402){
-        // Le serveur refuse : quota gratuit réellement épuisé (vérifié en base, pas dans le navigateur).
+        // Le serveur refuse : quota réellement épuisé, vérifié en base (pas dans le navigateur).
         hideUploadProgress();
-        showToast(fr?"Limite gratuite atteinte":"Free limit reached");
-        openCrypto("starter");
+        const upErr=await up.json().catch(()=>({}));
+        if(upErr.error==="plan_limit_reached"){
+          showToast(fr?"Plafond mensuel de votre plan atteint":"Your plan's monthly limit has been reached");
+          openCrypto("growth"); // le plan actuel (Starter) est plafonné : on propose l'offre supérieure, illimitée
+        }else{
+          showToast(fr?"Limite gratuite atteinte":"Free limit reached");
+          openCrypto("starter");
+        }
         break;
       }
       const upData=await up.json().catch(()=>({}));
@@ -854,6 +910,7 @@ async function onUpload(files){
     }catch(err){/* l'analyse reste tentée au prochain rafraîchissement automatique */}
     await refreshFindings();
     await refreshSummary();
+    await refreshContracts();
 
     const nb=created.length;
     const nbCritical=created.filter(f=>f.type==="critical").length;
