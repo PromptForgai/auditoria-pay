@@ -14,6 +14,11 @@ const PLANS = {
   growth: { price: 5000, name: "AuditorIA Growth — Monthly" }
 };
 
+// Plafond de documents par mois pour un plan payant. Un plan absent de cet objet (Growth) est illimité.
+// Le "mois" est le cycle de facturation de 30 jours (PLAN_DURATION_MS) : le compteur repart à 0 à chaque
+// paiement crédité (première activation ou renouvellement), pas au 1er du mois calendaire.
+const PLAN_LIMITS = { starter: 50 };
+
 const PLAN_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
 // Documents gratuits par compte (tous types confondus), sans limite de durée.
 // Il en faut au moins 2 pour voir un écart facture/BC : 5 permettent un relevé + facture + BC + 2 contrats.
@@ -124,10 +129,12 @@ export async function handleIpn(db, rawBody, signatureHeader, ipnSecret) {
   const existing = await db.prepare(`SELECT plan, expires_at FROM subscriptions WHERE user_id = ?`).bind(order.user_id).first();
   const base = (existing && existing.plan === order.plan && existing.expires_at > now) ? existing.expires_at : now;
 
+  // plan_documents_used repart à 0 à chaque paiement crédité : le "mois" du quota est ce cycle de
+  // facturation de 30 jours, pas le mois calendaire (voir PLAN_LIMITS plus haut).
   await db.prepare(
-    `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, updated_at)
-     VALUES (?,?,?,0,?)
-     ON CONFLICT(user_id) DO UPDATE SET plan = excluded.plan, expires_at = excluded.expires_at, updated_at = excluded.updated_at`
+    `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, plan_documents_used, updated_at)
+     VALUES (?,?,?,0,0,?)
+     ON CONFLICT(user_id) DO UPDATE SET plan = excluded.plan, expires_at = excluded.expires_at, plan_documents_used = 0, updated_at = excluded.updated_at`
   ).bind(order.user_id, order.plan, base + PLAN_DURATION_MS, now).run();
 }
 
@@ -142,46 +149,69 @@ export async function getSubscription(db, userId) {
   if (!sub) {
     const now = Date.now();
     await db.prepare(
-      `INSERT OR IGNORE INTO subscriptions (user_id, plan, expires_at, free_analyses_used, updated_at) VALUES (?,?,?,?,?)`
-    ).bind(userId, "free", null, 0, now).run();
-    sub = { user_id: userId, plan: "free", expires_at: null, free_analyses_used: 0 };
+      `INSERT OR IGNORE INTO subscriptions (user_id, plan, expires_at, free_analyses_used, plan_documents_used, updated_at) VALUES (?,?,?,?,?,?)`
+    ).bind(userId, "free", null, 0, 0, now).run();
+    sub = { user_id: userId, plan: "free", expires_at: null, free_analyses_used: 0, plan_documents_used: 0 };
   }
 
   const now = Date.now();
   const paidActive = sub.plan !== "free" && sub.expires_at && sub.expires_at > now;
   const paidExpired = sub.plan !== "free" && sub.expires_at && sub.expires_at <= now;
+  const planLimit = paidActive ? (PLAN_LIMITS[sub.plan] ?? null) : null; // null = illimité (Growth) ou sans objet (gratuit/expiré)
 
   return {
     plan: paidActive ? sub.plan : (paidExpired ? "expired" : "free"),
     expired: paidExpired,
     expires_at: sub.expires_at,
     free_left: Math.max(0, FREE_LIMIT - (sub.free_analyses_used || 0)),
-    active: paidActive
+    active: paidActive,
+    plan_limit: planLimit,
+    plan_left: planLimit != null ? Math.max(0, planLimit - (sub.plan_documents_used || 0)) : null
   };
 }
 
 // Vraie porte d'entrée avant chaque analyse — remplace useFreeAnalysis() côté client,
 // qui pouvait être contourné en modifiant le localStorage.
-// Renvoie { allowed, consumed } : consumed=true seulement si un essai GRATUIT a été décompté
-// (abonnement actif = pas de décompte), ce qui permet de le rembourser proprement en cas d'échec.
+// Renvoie { allowed, creditType, reason } : creditType indique QUEL compteur a été décompté
+// (0 = aucun/illimité, 1 = essai gratuit, 2 = quota mensuel d'un plan payant plafonné), pour pouvoir
+// le rembourser précisément si l'analyse échoue ensuite. reason n'est présent que si allowed=false.
 export async function consumeAnalysisCredit(db, userId) {
   const sub = await getSubscription(db, userId);
-  if (sub.active) return { allowed: true, consumed: false };
-  if (sub.free_left <= 0) return { allowed: false, consumed: false };
 
-  // Décompte atomique : la condition dans le WHERE empêche deux requêtes simultanées
-  // de dépasser FREE_LIMIT (le simple "lire puis écrire" d'avant le permettait).
+  if (sub.active) {
+    if (sub.plan_limit == null) return { allowed: true, creditType: 0 }; // Growth (ou tout plan sans plafond) : illimité
+
+    // Décompte atomique du quota mensuel du plan : la condition dans le WHERE empêche deux requêtes
+    // simultanées de dépasser le plafond.
+    const res = await db.prepare(
+      `UPDATE subscriptions SET plan_documents_used = plan_documents_used + 1, updated_at = ?
+       WHERE user_id = ? AND plan_documents_used < ?`
+    ).bind(Date.now(), userId, sub.plan_limit).run();
+    if (!res.meta.changes) return { allowed: false, creditType: 0, reason: 'plan_limit' };
+    return { allowed: true, creditType: 2 };
+  }
+
+  if (sub.free_left <= 0) return { allowed: false, creditType: 0, reason: 'free_limit' };
+
+  // Décompte atomique de l'essai gratuit : même principe.
   const res = await db.prepare(
     `UPDATE subscriptions SET free_analyses_used = free_analyses_used + 1, updated_at = ?
      WHERE user_id = ? AND free_analyses_used < ?`
   ).bind(Date.now(), userId, FREE_LIMIT).run();
-  if (!res.meta.changes) return { allowed: false, consumed: false };
-  return { allowed: true, consumed: true };
+  if (!res.meta.changes) return { allowed: false, creditType: 0, reason: 'free_limit' };
+  return { allowed: true, creditType: 1 };
 }
 
-// Rend un essai gratuit quand l'analyse a échoué côté serveur (fichier illisible, IA indisponible...).
-export async function refundAnalysisCredit(db, userId) {
-  await db.prepare(
-    `UPDATE subscriptions SET free_analyses_used = MAX(free_analyses_used - 1, 0), updated_at = ? WHERE user_id = ?`
-  ).bind(Date.now(), userId).run();
+// Rend le crédit consommé (essai gratuit ou quota mensuel du plan) quand l'analyse a échoué côté
+// serveur (fichier illisible, IA indisponible...). creditType vient de consumeAnalysisCredit ci-dessus.
+export async function refundAnalysisCredit(db, userId, creditType) {
+  if (creditType === 2) {
+    await db.prepare(
+      `UPDATE subscriptions SET plan_documents_used = MAX(plan_documents_used - 1, 0), updated_at = ? WHERE user_id = ?`
+    ).bind(Date.now(), userId).run();
+  } else if (creditType === 1) {
+    await db.prepare(
+      `UPDATE subscriptions SET free_analyses_used = MAX(free_analyses_used - 1, 0), updated_at = ? WHERE user_id = ?`
+    ).bind(Date.now(), userId).run();
+  }
 }

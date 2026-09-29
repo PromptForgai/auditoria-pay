@@ -2,7 +2,7 @@
 // Sert aussi le site (dossier public/) via [assets] dans wrangler.toml.
 // Les routes de données exigent une session valide (cookie httpOnly) : voir getUserId().
 
-import { extractDocument } from './extraction.js';
+import { extractDocument, classifyDocument } from './extraction.js';
 import { runAllRules } from './rules.js';
 import { getFullSummary } from './summary.js';
 import { createInvoice, handleIpn, getOrderStatus, getSubscription, consumeAnalysisCredit, refundAnalysisCredit } from './payments.js';
@@ -19,6 +19,9 @@ const MINUTE = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
 // donc 1,4 Mo de fichier ≈ 1,87 Mo stockés. Au-delà, il faudrait passer par R2.
 const MAX_FILE_BYTES = 1_400_000;
 const ALLOWED_KINDS = ['invoice', 'purchase_order', 'contract', 'bank_statement'];
+// 'auto' : le type réel est déterminé document par document à l'extraction (classifyDocument), pour
+// accepter un envoi groupé de fichiers de types différents sans que le client ait à les trier.
+const UPLOAD_KINDS = [...ALLOWED_KINDS, 'auto'];
 const MAX_TRANSACTIONS = 1000;
 
 // Pas d'en-tête CORS : le site et l'API sont servis par le même Worker (même origine).
@@ -205,7 +208,7 @@ async function discardFailedDocument(db, doc, userId) {
     const del = await db.prepare(
       `DELETE FROM documents WHERE id = ? AND user_id = ? AND status = 'extracting'`
     ).bind(doc.id, userId).run();
-    if (del.meta.changes && doc.credit_used) await refundAnalysisCredit(db, userId);
+    if (del.meta.changes && doc.credit_used) await refundAnalysisCredit(db, userId, doc.credit_used);
   } catch (err) {
     console.error('Échec du nettoyage après erreur d\'extraction:', err);
   }
@@ -356,16 +359,18 @@ export default {
         let form;
         try { form = await request.formData(); } catch { throw new HttpError(400, 'envoi invalide'); }
         const file = form.get('file');
-        const kind = form.get('kind'); // invoice | purchase_order | contract | bank_statement
+        const kind = form.get('kind'); // invoice | purchase_order | contract | bank_statement | auto
         if (!file || typeof file === 'string' || typeof kind !== 'string') throw new HttpError(400, 'file et kind requis');
-        if (!ALLOWED_KINDS.includes(kind)) throw new HttpError(400, 'type de document inconnu');
+        if (!UPLOAD_KINDS.includes(kind)) throw new HttpError(400, 'type de document inconnu');
         if (file.size === 0) throw new HttpError(400, 'fichier vide');
         if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
 
         const filename = String(file.name || 'document').slice(0, 200);
         const ext = (filename.split('.').pop() || '').toLowerCase();
         if (!['pdf', 'csv', 'txt'].includes(ext)) throw new HttpError(415, 'Formats acceptés : PDF, CSV.');
-        if (ext !== 'pdf' && kind !== 'bank_statement') throw new HttpError(415, 'Ce type de document doit être envoyé en PDF (le CSV est réservé aux relevés bancaires).');
+        // En détection automatique, le vrai type n'est pas encore connu : on ne peut pas encore vérifier
+        // sa cohérence avec l'extension (fait à l'extraction, une fois le type déterminé).
+        if (kind !== 'auto' && ext !== 'pdf' && kind !== 'bank_statement') throw new HttpError(415, 'Ce type de document doit être envoyé en PDF (le CSV est réservé aux relevés bancaires).');
 
         const buffer = await file.arrayBuffer();
         if (ext === 'pdf' && new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength))) !== '%PDF-') {
@@ -385,8 +390,11 @@ export default {
         }
 
         // 3. Quota : décompté seulement maintenant, de façon atomique (voir payments.js).
+        // 'free_limit_reached' (plan gratuit épuisé) et 'plan_limit_reached' (plafond mensuel du plan
+        // payant atteint, ex. Starter) sont deux cas distincts : le front n'affiche pas le même message
+        // ni ne propose le même plan de mise à niveau pour l'un et pour l'autre.
         const credit = await consumeAnalysisCredit(db, userId);
-        if (!credit.allowed) return json({ error: 'free_limit_reached' }, 402);
+        if (!credit.allowed) return json({ error: credit.reason === 'plan_limit' ? 'plan_limit_reached' : 'free_limit_reached' }, 402);
 
         // Stockage direct en D1 (pas de R2 : R2 exige une carte bancaire/PayPal pour être activé).
         const documentId = crypto.randomUUID();
@@ -394,9 +402,9 @@ export default {
           await db.prepare(
             `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at, credit_used, content_hash)
              VALUES (?,?,?,?,?,?,?,?,?)`
-          ).bind(documentId, userId, kind, arrayBufferToBase64(buffer), filename, 'uploaded', Date.now(), credit.consumed ? 1 : 0, contentHash).run();
+          ).bind(documentId, userId, kind, arrayBufferToBase64(buffer), filename, 'uploaded', Date.now(), credit.creditType, contentHash).run();
         } catch (err) {
-          if (credit.consumed) await refundAnalysisCredit(db, userId);
+          if (credit.creditType) await refundAnalysisCredit(db, userId, credit.creditType);
           throw err;
         }
 
@@ -425,16 +433,24 @@ export default {
             ? { pdfBase64: doc.content_base64 }
             : { text: base64ToText(doc.content_base64) }; // CSV/texte
 
-          const fields = await extractDocument(doc.kind, input, env.GEMINI_API_KEY);
-          const statements = buildStatements(db, documentId, userId, doc.kind, fields);
+          // Type déterminé automatiquement : un CSV/texte n'est, dans ce système, jamais autre chose
+          // qu'un relevé bancaire (évite un appel Gemini inutile) ; un PDF est soumis à la classification.
+          let kind = doc.kind;
+          if (kind === 'auto') {
+            kind = isPdf ? await classifyDocument(input, env.GEMINI_API_KEY) : 'bank_statement';
+          }
 
-          // Tout ou rien : extraction brute + lignes normalisées + statut "extracted" dans une seule transaction.
+          const fields = await extractDocument(kind, input, env.GEMINI_API_KEY);
+          const statements = buildStatements(db, documentId, userId, kind, fields);
+
+          // Tout ou rien : extraction brute + lignes normalisées + statut "extracted" (et type déterminé
+          // si "auto") dans une seule transaction.
           await db.batch([
             db.prepare(`INSERT INTO extractions (document_id, kind, data_json) VALUES (?,?,?)`)
-              .bind(documentId, doc.kind, JSON.stringify(fields)),
+              .bind(documentId, kind, JSON.stringify(fields)),
             ...statements,
-            db.prepare(`UPDATE documents SET status = 'extracted', extracted_at = ? WHERE id = ?`)
-              .bind(Date.now(), documentId)
+            db.prepare(`UPDATE documents SET status = 'extracted', extracted_at = ?, kind = ? WHERE id = ?`)
+              .bind(Date.now(), kind, documentId)
           ]);
         } catch (err) {
           await discardFailedDocument(db, doc, userId); // le client peut réessayer sans avoir perdu un essai
@@ -474,6 +490,16 @@ export default {
           .bind(status, statusMatch[1], userId).run();
         if (!res.meta.changes) throw new HttpError(404, 'alerte introuvable');
         return json({ ok: true });
+      }
+
+      // GET /contracts — contrats réellement importés par le client (page "Contracts" du dashboard).
+      if (url.pathname === '/contracts' && request.method === 'GET') {
+        const userId = await getUserId(request, env);
+        const { results } = await db.prepare(
+          `SELECT document_id, supplier_name, contract_ref, amount, currency, start_date, end_date, auto_renew
+           FROM contracts WHERE user_id = ? ORDER BY (end_date IS NULL), end_date ASC`
+        ).bind(userId).all();
+        return json({ contracts: results });
       }
 
       // GET /summary — trésorerie, économies, flux calculés à partir des vraies transactions et alertes stockées.

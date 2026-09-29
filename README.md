@@ -65,6 +65,9 @@ toute route de données renvoie 401. À ne pas casser plus tard :
 | `POST /auth/forgot-password`, `/auth/reset-password` | mot de passe oublié (répond « ok » que le compte existe ou non) |
 | `POST /create-invoice`, `POST /ipn`, `GET /status`, `GET /subscription` | paiements et abonnement |
 | `POST /upload` → `POST /extract/:id` → `POST /analyze` | dépôt, extraction IA, règles |
+| `GET /contracts` | contrats réellement importés (page Contracts du dashboard) |
+| `GET /me` | email du compte connecté (menu du dashboard) |
+| `POST /account/change-password` | changement de mot de passe (page Paramètres, session active requise) |
 | `GET /findings`, `POST /findings/:id/status` | alertes ; `status` = `reviewed` ou `dismissed` |
 | `GET /summary` | trésorerie, économies, flux |
 
@@ -88,6 +91,39 @@ alerte ignorée ne revient pas.
   une économie). Les alertes ignorées sont exclues. C'est de l'argent repéré, pas récupéré. « Économies (année) » cumule
   depuis le 1er janvier.
 - **Flux entrants/sortants** = sommes réelles du mois en cours.
+
+## Détection automatique du type de document
+
+Le menu de dépôt propose « Détection automatique (recommandé) », réglage par défaut, en plus des quatre types
+explicites. Elle permet un envoi groupé de fichiers de types différents sans avoir à les trier :
+- un CSV est toujours traité comme un relevé bancaire, sans appel supplémentaire (c'est le seul type CSV du système) ;
+- un PDF est d'abord soumis à un petit appel Gemini de classification (facture / bon de commande / contrat / relevé),
+  puis à l'extraction normale avec le schéma correspondant.
+
+Chaque document en mode automatique consomme donc, pour un PDF, un appel Gemini de plus que ci-dessus (extraction
+classique). Le type détecté est enregistré sur le document (`documents.kind`) : il reste consultable et n'est jamais
+redéterminé aux extractions suivantes.
+
+## Plans payants : plafond mensuel
+
+- **Starter (2 000 $/mois) : 50 documents par mois.** Au-delà, l'upload répond `402 plan_limit_reached` et le
+  bandeau propose de passer à Growth (au lieu du message et du plan proposés quand c'est le quota gratuit qui est
+  épuisé — les deux cas sont distincts, y compris dans le message affiché).
+- **Growth (5 000 $/mois) : illimité.**
+- Le "mois" est le **cycle de facturation de 30 jours**, pas le mois calendaire : le compteur repart à 0 à chaque
+  paiement crédité (première activation ou renouvellement), qu'il coïncide ou non avec le 1er du mois.
+- Comme pour le quota gratuit, le décompte est atomique (aucun dépassement possible par deux requêtes simultanées)
+  et remboursé si l'extraction échoue ensuite.
+- Pour changer la limite de Starter ou plafonner Growth, modifie `PLAN_LIMITS` dans `payments.js`. Un plan absent de
+  cet objet est illimité.
+
+## Abonnement : durée et expiration
+
+Chaque activation ou renouvellement ajoute exactement **30 jours** (`PLAN_DURATION_MS`) à partir du paiement crédité
+— ou à partir de la date d'expiration en cours si le renouvellement arrive avant qu'elle ne soit dépassée (les jours
+restants ne sont jamais perdus). `GET /subscription` renvoie `expires_at` ; passé cette date, le plan repasse
+automatiquement à `expired` puis à `free` dès la prochaine vérification, sans tâche planifiée nécessaire (le calcul
+se fait à la lecture, pas par un job qui tournerait en arrière-plan).
 
 ## Paiements NOWPayments
 
@@ -135,3 +171,5 @@ automatiquement à tawk.to.
 - R2 pour les gros fichiers ; vérification d'email ; bouton « faire confiance à cet IBAN » qui alimente
   `known_counterparties` ; cron quotidien pour les échéances de contrat ; règle `invoice_drift` (prévue dans le schéma,
   jamais implémentée).
+- Adresse de support (`SUPPORT_EMAIL` dans `public/index.html`) : actuellement une adresse Gmail personnelle,
+  à remplacer par une adresse sur le domaine du site pour un rendu plus professionnel.

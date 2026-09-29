@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   plan TEXT NOT NULL DEFAULT 'free',
   expires_at INTEGER,
   free_analyses_used INTEGER NOT NULL DEFAULT 0,
+  plan_documents_used INTEGER NOT NULL DEFAULT 0, -- documents du mois en cours pour un plan payant plafonné (Starter) ; remis à 0 à chaque paiement crédité
   updated_at INTEGER NOT NULL
 );
 
