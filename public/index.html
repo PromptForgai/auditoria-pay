@@ -441,6 +441,10 @@ footer{padding:40px;text-align:center;color:var(--muted);font-size:.88rem;border
           <p data-i18n="upload_desc">Drag PDF or CSV files here · Sent over HTTPS · Analysed by a third-party AI service</p>
           <input type="file" id="fileInput" accept=".pdf,.csv" multiple hidden>
         </div>
+        <div id="uploadProgress" style="display:none;margin-top:12px">
+          <div style="display:flex;justify-content:space-between;font-size:.82rem;color:var(--muted);margin-bottom:6px"><span id="uploadProgressLabel"></span><span id="uploadProgressPct">0%</span></div>
+          <div style="height:8px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden"><div id="uploadProgressBar" style="height:100%;width:0%;background:var(--em,#10b981);transition:width .3s"></div></div>
+        </div>
         <table class="contracts-table">
           <thead><tr><th data-i18n="th_contract">Contract</th><th data-i18n="th_vendor">Vendor</th><th data-i18n="th_amount">Annual amount</th><th data-i18n="th_expiry">Expiry</th><th data-i18n="th_status">Status</th></tr></thead>
           <tbody>
@@ -792,15 +796,30 @@ async function refreshFindings(){
   }catch(err){alerts=[];renderAlerts()}
 }
 
+function setUploadProgress(i,total,label){
+  const box=document.getElementById("uploadProgress"),bar=document.getElementById("uploadProgressBar"),
+        lbl=document.getElementById("uploadProgressLabel"),pct=document.getElementById("uploadProgressPct");
+  if(!box)return;
+  box.style.display="";
+  const p=total>0?Math.round((i/total)*100):0;
+  bar.style.width=p+"%";
+  pct.textContent=p+"%";
+  lbl.textContent=label;
+}
+function hideUploadProgress(){const box=document.getElementById("uploadProgress");if(box)box.style.display="none"}
+
 async function onUpload(files){
   files=Array.from(files||[]);
   if(!files.length)return;
   const sel=document.getElementById("docKindSelect");
   const kind=(sel?sel.value:null)||"contract";
   const fr=currentLang==="fr";
-  let done=0;
-  for(const file of files){
-    showToast(fr?`Envoi de ${file.name} · Analyse IA…`:`Uploading ${file.name} · AI analysis…`);
+  let done=0,errorCount=0;
+  const total=files.length;
+  setUploadProgress(0,total,fr?`Analyse en cours… (0/${total})`:`Analyzing… (0/${total})`);
+  for(let i=0;i<files.length;i++){
+    const file=files[i];
+    setUploadProgress(i,total,fr?`Analyse de ${file.name}… (${i+1}/${total})`:`Analyzing ${file.name}… (${i+1}/${total})`);
     try{
       const form=new FormData();
       form.append("file",file);
@@ -808,6 +827,7 @@ async function onUpload(files){
       const up=await fetch(API_BASE+"/upload",{method:"POST",credentials:"include",body:form});
       if(up.status===402){
         // Le serveur refuse : quota gratuit réellement épuisé (vérifié en base, pas dans le navigateur).
+        hideUploadProgress();
         showToast(fr?"Limite gratuite atteinte":"Free limit reached");
         openCrypto("starter");
         break;
@@ -819,10 +839,12 @@ async function onUpload(files){
       if(!ex.ok){const exData=await ex.json().catch(()=>({}));throw new Error(exData.error||"extraction failed")}
       done++;
     }catch(err){
-      showToast((fr?"Erreur d'analyse ("+file.name+") : ":"Analysis error ("+file.name+"): ")+err.message);
-      await new Promise(r=>setTimeout(r,2500)); // laisse le message lisible avant le fichier suivant
+      errorCount++;
+      console.error("Échec sur",file.name,err.message);
     }
+    setUploadProgress(i+1,total,fr?`Analyse de ${file.name}… (${i+1}/${total})`:`Analyzing ${file.name}… (${i+1}/${total})`);
   }
+  hideUploadProgress();
   if(done){
     let created=[];
     try{
@@ -835,15 +857,18 @@ async function onUpload(files){
 
     const nb=created.length;
     const nbCritical=created.filter(f=>f.type==="critical").length;
+    const errSuffix=errorCount?(fr?` (${errorCount} fichier${errorCount>1?"s":""} en erreur)`:` (${errorCount} file${errorCount>1?"s":""} failed)`):"";
     if(nb===0){
-      showToast(fr?"Analyse terminée — aucune anomalie détectée":"Analysis complete — no anomalies detected");
+      showToast((fr?"Analyse terminée — aucune anomalie détectée":"Analysis complete — no anomalies detected")+errSuffix);
     }else{
-      showToast(fr
+      showToast((fr
         ? `Analyse terminée — ${nb} anomalie${nb>1?"s":""} détectée${nb>1?"s":""}${nbCritical?`, dont ${nbCritical} critique${nbCritical>1?"s":""}`:""}`
-        : `Analysis complete — ${nb} anomal${nb>1?"ies":"y"} detected${nbCritical?`, ${nbCritical} critical`:""}`);
+        : `Analysis complete — ${nb} anomal${nb>1?"ies":"y"} detected${nbCritical?`, ${nbCritical} critical`:""}`)+errSuffix);
       // On amène directement le client devant les anomalies trouvées, au lieu de le laisser sur l'écran d'upload.
       document.querySelector('.nav-item[data-page="alertes"]')?.click();
     }
+  }else if(errorCount){
+    showToast(fr?`Échec de l'analyse (${errorCount} fichier${errorCount>1?"s":""})`:`Analysis failed (${errorCount} file${errorCount>1?"s":""})`);
   }
   await checkSubscription(); // le compteur d'essais gratuits vient de bouger côté serveur
   if(fi)fi.value=""; // permet de re-sélectionner le même fichier
