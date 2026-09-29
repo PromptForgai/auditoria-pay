@@ -12,7 +12,11 @@
 
 import { HttpError } from './errors.js';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+// GEMINI_MODEL : gemini-2.5-flash s'arrête le 16 octobre 2026 (toute la famille 2.5), d'où le passage à l'alias
+// "-latest". Google déconseille cet alias en production (il change sans prévenir le code, avec 2 semaines de
+// préavis par email au titulaire du compte) : si tu veux figer une version précise à la place, vérifie le nom
+// exact sur https://ai.google.dev/gemini-api/docs/models et remplace la ligne ci-dessous.
+const GEMINI_MODEL = 'gemini-flash-latest';
 const MAX_TEXT_CHARS = 120000; // au-delà, on refuse plutôt que de tronquer en silence (transactions perdues)
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -120,7 +124,7 @@ export async function extractDocument(kind, input, apiKey) {
       generationConfig: {
         temperature: 0,                    // extraction : aucune créativité voulue
         maxOutputTokens: 32768,
-        thinkingConfig: { thinkingBudget: 0 }, // pas de "réflexion" : moins cher, et n'entame pas le budget de sortie
+        thinkingConfig: { thinkingLevel: 'minimal' }, // équivalent le plus proche de "pas de réflexion" sur Gemini 3.x (thinkingBudget n'existe plus) ; les modèles Flash 3.x ne permettent pas de la couper complètement
         responseMimeType: 'application/json',
         responseSchema: schema
       }
