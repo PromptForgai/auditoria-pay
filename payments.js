@@ -9,32 +9,44 @@ import { HttpError } from './errors.js';
 
 const NP_API = "https://api.nowpayments.io/v1";
 
+// Prix par cycle de facturation. L'annuel vaut ici 10 fois le prix mensuel (2 mois offerts, ~17% de
+// remise) — une pratique courante, mais purement une hypothèse de départ : change ces deux nombres
+// (starter.annual.price et growth.annual.price) si tu veux un autre tarif annuel.
 const PLANS = {
-  starter: { price: 2000, name: "AuditorIA Starter — Monthly" },
-  growth: { price: 5000, name: "AuditorIA Growth — Monthly" }
+  starter: {
+    monthly: { price: 2000, days: 30, name: "AuditorIA Starter — Monthly" },
+    annual: { price: 20000, days: 360, name: "AuditorIA Starter — Annual" }
+  },
+  growth: {
+    monthly: { price: 5000, days: 30, name: "AuditorIA Growth — Monthly" },
+    annual: { price: 50000, days: 360, name: "AuditorIA Growth — Annual" }
+  }
 };
 
-// Plafond de documents par mois pour un plan payant. Un plan absent de cet objet (Growth) est illimité.
-// Le "mois" est le cycle de facturation de 30 jours (PLAN_DURATION_MS) : le compteur repart à 0 à chaque
-// paiement crédité (première activation ou renouvellement), pas au 1er du mois calendaire.
+// Plafond de documents pour un plan payant, par tranche de 30 jours, quel que soit le cycle de
+// facturation choisi (un client Starter annuel a quand même un quota qui se renouvelle tous les 30
+// jours, pas une seule fois pour l'année — voir resetPlanQuotaIfDue ci-dessous). Un plan absent de cet
+// objet (Growth) est illimité.
 const PLAN_LIMITS = { starter: 50 };
+const QUOTA_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
-const PLAN_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
 // Documents gratuits par compte (tous types confondus), sans limite de durée.
 // Il en faut au moins 2 pour voir un écart facture/BC : 5 permettent un relevé + facture + BC + 2 contrats.
 export const FREE_LIMIT = 5;
 
-export async function createInvoice(db, userId, plan, successUrl, workerOrigin, apiKey, ipnSecret) {
+export async function createInvoice(db, userId, plan, cycle, successUrl, workerOrigin, apiKey, ipnSecret) {
   plan = (plan || "starter").toLowerCase();
+  cycle = cycle === "annual" ? "annual" : "monthly"; // toute valeur inconnue retombe sur mensuel, jamais sur le tarif annuel
   if (!PLANS[plan]) throw new HttpError(400, "plan invalide");
+  const tier = PLANS[plan][cycle];
   if (!apiKey) throw new Error("NOWPAYMENTS_API_KEY non configurée"); // erreur de config : journalisée, jamais montrée au client
 
-  const orderId = `auditoria-${plan}-${crypto.randomUUID()}`;
+  const orderId = `auditoria-${plan}-${cycle}-${crypto.randomUUID()}`;
   const payload = {
-    price_amount: PLANS[plan].price,
+    price_amount: tier.price,
     price_currency: "usd",
     order_id: orderId,
-    order_description: PLANS[plan].name,
+    order_description: tier.name,
     success_url: successUrl.includes("?")
       ? `${successUrl}&order_id=${orderId}&plan=${plan}`
       : `${successUrl}?order_id=${orderId}&plan=${plan}`,
@@ -55,10 +67,11 @@ export async function createInvoice(db, userId, plan, successUrl, workerOrigin, 
   }
 
   // La commande est liée à user_id ici, côté serveur — le client ne peut jamais choisir
-  // pour quel compte elle sera créditée.
+  // pour quel compte elle sera créditée. Le cycle vient aussi du serveur (le prix a été fixé selon lui) :
+  // handleIpn le relit sur cette même ligne pour savoir combien de jours créditer, jamais depuis le client.
   await db.prepare(
-    `INSERT INTO orders (order_id, user_id, plan, invoice_id, status, created_at) VALUES (?,?,?,?,?,?)`
-  ).bind(orderId, userId, plan, data.id, "pending", Date.now()).run();
+    `INSERT INTO orders (order_id, user_id, plan, cycle, invoice_id, status, created_at) VALUES (?,?,?,?,?,?,?)`
+  ).bind(orderId, userId, plan, cycle, data.id, "pending", Date.now()).run();
 
   return { order_id: orderId, invoice_url: data.invoice_url, invoice_id: data.id };
 }
@@ -104,11 +117,13 @@ export async function handleIpn(db, rawBody, signatureHeader, ipnSecret) {
 
   const order = await db.prepare(`SELECT * FROM orders WHERE order_id = ?`).bind(orderId).first();
   if (!order) return; // commande inconnue : on n'active jamais un abonnement sans commande liée à un compte
-  const plan = PLANS[order.plan];
-  if (!plan) return;
+  const planTiers = PLANS[order.plan];
+  if (!planTiers) return;
+  const cycle = order.cycle === "annual" ? "annual" : "monthly";
+  const tier = planTiers[cycle];
 
-  // Le montant doit correspondre au prix du plan (défense en profondeur, en plus de la signature).
-  if (body.price_amount != null && Number(body.price_amount) < plan.price) {
+  // Le montant doit correspondre au prix du cycle facturé (défense en profondeur, en plus de la signature).
+  if (body.price_amount != null && Number(body.price_amount) < tier.price) {
     console.error("IPN ignoré : montant inférieur au prix du plan", orderId, body.price_amount);
     return;
   }
@@ -125,17 +140,23 @@ export async function handleIpn(db, rawBody, signatureHeader, ipnSecret) {
   ).bind(now, orderId).run();
   if (!claim.meta.changes) return;
 
-  // Renouvellement anticipé du même plan : les 30 jours s'ajoutent à ce qui reste, on ne perd rien.
-  const existing = await db.prepare(`SELECT plan, expires_at FROM subscriptions WHERE user_id = ?`).bind(order.user_id).first();
-  const base = (existing && existing.plan === order.plan && existing.expires_at > now) ? existing.expires_at : now;
+  // Renouvellement anticipé du même plan (et du même cycle) : la durée s'ajoute à ce qui reste, on ne
+  // perd rien. Changer de plan ou de cycle repart d'aujourd'hui plutôt que de cumuler deux durées
+  // différentes (30 jours restants de Starter + 360 jours de Growth n'aurait pas de sens).
+  const existing = await db.prepare(`SELECT plan, plan_cycle, expires_at FROM subscriptions WHERE user_id = ?`).bind(order.user_id).first();
+  const base = (existing && existing.plan === order.plan && existing.plan_cycle === cycle && existing.expires_at > now) ? existing.expires_at : now;
+  const durationMs = tier.days * 24 * 60 * 60 * 1000;
 
-  // plan_documents_used repart à 0 à chaque paiement crédité : le "mois" du quota est ce cycle de
-  // facturation de 30 jours, pas le mois calendaire (voir PLAN_LIMITS plus haut).
+  // plan_documents_used et plan_quota_reset_at repartent de 0 à chaque paiement crédité. Pour un
+  // abonnement annuel, resetPlanQuotaIfDue (plus bas) les remettra ensuite à 0 tous les 30 jours
+  // pendant la durée de l'abonnement : le plafond mensuel ne dépend pas de la fréquence de paiement.
   await db.prepare(
-    `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, plan_documents_used, updated_at)
-     VALUES (?,?,?,0,0,?)
-     ON CONFLICT(user_id) DO UPDATE SET plan = excluded.plan, expires_at = excluded.expires_at, plan_documents_used = 0, updated_at = excluded.updated_at`
-  ).bind(order.user_id, order.plan, base + PLAN_DURATION_MS, now).run();
+    `INSERT INTO subscriptions (user_id, plan, expires_at, free_analyses_used, plan_documents_used, plan_cycle, plan_quota_reset_at, updated_at)
+     VALUES (?,?,?,0,0,?,?,?)
+     ON CONFLICT(user_id) DO UPDATE SET plan = excluded.plan, expires_at = excluded.expires_at,
+       plan_documents_used = 0, plan_cycle = excluded.plan_cycle, plan_quota_reset_at = excluded.plan_quota_reset_at,
+       updated_at = excluded.updated_at`
+  ).bind(order.user_id, order.plan, base + durationMs, cycle, now, now).run();
 }
 
 export async function getOrderStatus(db, orderId) {
@@ -151,12 +172,28 @@ export async function getSubscription(db, userId) {
     await db.prepare(
       `INSERT OR IGNORE INTO subscriptions (user_id, plan, expires_at, free_analyses_used, plan_documents_used, updated_at) VALUES (?,?,?,?,?,?)`
     ).bind(userId, "free", null, 0, 0, now).run();
-    sub = { user_id: userId, plan: "free", expires_at: null, free_analyses_used: 0, plan_documents_used: 0 };
+    sub = { user_id: userId, plan: "free", expires_at: null, free_analyses_used: 0, plan_documents_used: 0, plan_quota_reset_at: null };
   }
 
   const now = Date.now();
   const paidActive = sub.plan !== "free" && sub.expires_at && sub.expires_at > now;
   const paidExpired = sub.plan !== "free" && sub.expires_at && sub.expires_at <= now;
+
+  // Le plafond de documents d'un plan payant se renouvelle tous les 30 jours, qu'il soit facturé au
+  // mois ou à l'année (un abonnement annuel n'a pas un unique quota pour toute l'année). Calcul
+  // paresseux : pas de tâche planifiée, on corrige simplement à la lecture si un cycle de 30 jours
+  // s'est écoulé depuis la dernière remise à 0.
+  if (paidActive && PLAN_LIMITS[sub.plan] != null) {
+    const resetAt = sub.plan_quota_reset_at || 0;
+    if (now - resetAt >= QUOTA_PERIOD_MS) {
+      await db.prepare(
+        `UPDATE subscriptions SET plan_documents_used = 0, plan_quota_reset_at = ? WHERE user_id = ?`
+      ).bind(now, userId).run();
+      sub.plan_documents_used = 0;
+      sub.plan_quota_reset_at = now;
+    }
+  }
+
   const planLimit = paidActive ? (PLAN_LIMITS[sub.plan] ?? null) : null; // null = illimité (Growth) ou sans objet (gratuit/expiré)
 
   return {

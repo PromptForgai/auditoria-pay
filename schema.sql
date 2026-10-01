@@ -83,8 +83,21 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,     -- PBKDF2 (voir auth.js), jamais le mot de passe en clair
   password_salt TEXT NOT NULL,
+  signup_ip TEXT,                  -- pour la règle "1 compte par IP" à l'inscription (voir index.js)
+  email_verified INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
+
+-- Code de confirmation d'email à l'inscription (un seul actif par compte, écrasé à chaque renvoi)
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+  user_id TEXT PRIMARY KEY REFERENCES users(id),
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+-- "1 compte par IP" (NULL autorisé plusieurs fois : ne concerne que les inscriptions avec IP connue)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_signup_ip ON users(signup_ip);
 
 -- Sessions actives (on stocke un hash du token, jamais le token lui-même)
 CREATE TABLE IF NOT EXISTS sessions (
@@ -109,6 +122,7 @@ CREATE TABLE IF NOT EXISTS orders (
   order_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
   plan TEXT NOT NULL,
+  cycle TEXT NOT NULL DEFAULT 'monthly', -- 'monthly' (30 jours) | 'annual' (360 jours)
   invoice_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending', -- pending | paid
   created_at INTEGER NOT NULL,
@@ -122,7 +136,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   plan TEXT NOT NULL DEFAULT 'free',
   expires_at INTEGER,
   free_analyses_used INTEGER NOT NULL DEFAULT 0,
-  plan_documents_used INTEGER NOT NULL DEFAULT 0, -- documents du mois en cours pour un plan payant plafonné (Starter) ; remis à 0 à chaque paiement crédité
+  plan_documents_used INTEGER NOT NULL DEFAULT 0, -- documents du cycle de 30 jours en cours (plan plafonné, ex. Starter)
+  plan_cycle TEXT,                 -- 'monthly' | 'annual' : dernier cycle de facturation payé
+  plan_quota_reset_at INTEGER,     -- dernière remise à 0 du quota de 30 jours (indépendant du cycle de facturation :
+                                    -- un abonnement annuel voit quand même son quota de documents repartir tous les 30 jours)
   updated_at INTEGER NOT NULL
 );
 
@@ -158,4 +175,24 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT PRIMARY KEY,
   count INTEGER NOT NULL,
   window_start INTEGER NOT NULL
+);
+
+-- Profil KYC (identité + justificatifs) : soumission uniquement, pas de vérification automatisée.
+-- Une ligne apparaît seulement une fois que le client a soumis le formulaire ; son absence = "non soumis".
+CREATE TABLE IF NOT EXISTS kyc_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id),
+  first_name TEXT,
+  last_name TEXT,
+  address_line TEXT,
+  city TEXT,
+  postal_code TEXT,
+  country TEXT,
+  id_document_base64 TEXT,
+  id_document_filename TEXT,
+  proof_address_base64 TEXT,
+  proof_address_filename TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  submitted_at INTEGER NOT NULL,
+  reviewed_at INTEGER,
+  reviewer_note TEXT
 );

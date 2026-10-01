@@ -66,6 +66,8 @@ toute route de données renvoie 401. À ne pas casser plus tard :
 | `POST /create-invoice`, `POST /ipn`, `GET /status`, `GET /subscription` | paiements et abonnement |
 | `POST /upload` → `POST /extract/:id` → `POST /analyze` | dépôt, extraction IA, règles |
 | `GET /contracts` | contrats réellement importés (page Contracts du dashboard) |
+| `POST /auth/verify-email`, `POST /auth/resend-verification` | confirmation de l'email par code à 6 chiffres |
+| `POST /kyc/submit`, `GET /kyc/status` | profil KYC : identité + justificatifs (soumission, pas de vérification automatisée) |
 | `GET /me` | email du compte connecté (menu du dashboard) |
 | `POST /account/change-password` | changement de mot de passe (page Paramètres, session active requise) |
 | `GET /findings`, `POST /findings/:id/status` | alertes ; `status` = `reviewed` ou `dismissed` |
@@ -91,6 +93,62 @@ alerte ignorée ne revient pas.
   une économie). Les alertes ignorées sont exclues. C'est de l'argent repéré, pas récupéré. « Économies (année) » cumule
   depuis le 1er janvier.
 - **Flux entrants/sortants** = sommes réelles du mois en cours.
+
+## Un seul point de dépôt, analyse automatique
+
+Tout le dépôt de documents passe par la page **Import** du menu (nouvelle entrée dédiée) : l'ancienne
+zone d'upload décorative du Dashboard et celle dupliquée sur la page Contracts ont été retirées. Le
+Dashboard pointe maintenant vers cette page unique via un bouton, et Contracts n'affiche plus que les
+vrais contrats importés. L'analyse (extraction + règles) démarrait déjà automatiquement après l'upload
+avant ce changement ; ça n'a pas changé, c'était juste réparti sur deux écrans.
+
+## Abonnement mensuel ou annuel
+
+Les deux plans proposent maintenant un choix **mensuel (30 jours) ou annuel (360 jours)**, sur la page de
+tarifs comme dans la fenêtre de paiement. Le tarif annuel vaut **10 fois le prix mensuel** (2 mois
+offerts, ~17% de remise) — une hypothèse de départ, pas un chiffre qui t'a été demandé : change
+`PLANS.starter.annual.price` et `PLANS.growth.annual.price` dans `payments.js` si tu veux un autre tarif.
+Le cycle choisi est mémorisé sur la commande (`orders.cycle`) et c'est lui qui détermine la durée
+créditée par `handleIpn`, jamais une valeur envoyée par le navigateur.
+
+Le plafond de 50 documents de Starter continue de se renouveler **tous les 30 jours**, qu'il soit facturé
+au mois ou à l'année (`plan_quota_reset_at`, recalculé à la lecture) : un Starter annuel n'a pas un seul
+quota pour toute l'année, mais bien un quota qui repart à 0 toutes les 30 jours comme en mensuel.
+
+## Confirmation d'email à l'inscription
+
+Un code à 6 chiffres (valable 15 minutes, 8 tentatives maximum) est envoyé à l'inscription, via le même
+mécanisme d'email que la réinitialisation de mot de passe (Brevo, sinon Resend, sinon juste journalisé en
+développement — voir plus bas). Tant que l'email n'est pas confirmé, le compte reste utilisable (connexion,
+consultation) mais **`POST /upload` est bloqué** (403 `email_not_verified`) : pas d'analyse de documents,
+donc pas de coût Gemini ni de crédit consommé, sans confirmation préalable. Un bandeau dans le dashboard
+permet d'entrer le code ou d'en redemander un.
+
+## 1 compte par adresse IP
+
+Un index unique en base (`idx_users_signup_ip`) empêche la création d'un deuxième compte depuis la même
+IP, pour de bon (pas seulement "par jour"). **Point d'attention réel** : plusieurs personnes derrière la
+même IP (bureau, Wi-Fi public, bien des connexions mobiles en dehors des US via le CGNAT, VPN) ne pourront
+créer qu'un seul compte à elles toutes, et un VPN ou un Wi-Fi public déjà utilisé une fois par quelqu'un
+d'autre peut bloquer un vrai client plus tard. C'est ce qui a été demandé, mais c'est plus strict que la
+plupart des sites (qui se contentent d'une limite par jour, déjà en place par ailleurs : 5 inscriptions/jour
+et par IP) — à surveiller si des clients légitimes se plaignent de ne pas pouvoir s'inscrire.
+
+## Profil KYC
+
+La page **Profil** du menu permet au client de renseigner nom, prénom, adresse et d'envoyer une pièce
+d'identité et un justificatif de domicile (PDF, JPG ou PNG, 1,4 Mo max chacun). **Ceci reçoit et stocke
+les documents (statut `pending`), ça ne les vérifie pas** : aucun fournisseur de vérification d'identité
+n'est branché (pas de contrôle d'authenticité, pas de rapprochement visage/pièce). Il faut qu'un humain
+passe le statut à `approved` ou `rejected` directement en base (pas d'écran d'administration fourni) :
+```sql
+UPDATE kyc_profiles SET status = 'approved', reviewed_at = unixepoch() * 1000 WHERE user_id = '...';
+```
+**À savoir avant d'ouvrir ça à de vrais clients** : les documents sont stockés en base en base64, comme les
+documents financiers — protégés par les sessions et les requêtes préparées comme le reste de l'app, mais
+sans chiffrement dédié. Des pièces d'identité sont des données personnelles sensibles ; une politique de
+rétention/suppression et, selon où sont tes clients, des obligations légales (RGPD ou équivalent) sont à
+prévoir — ce n'est pas quelque chose qu'un simple choix technique résout.
 
 ## Détection automatique du type de document
 

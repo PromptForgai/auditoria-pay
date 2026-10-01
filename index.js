@@ -64,6 +64,16 @@ async function sha256Hex(buffer) {
   const digest = await crypto.subtle.digest('SHA-256', buffer);
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
+async function sha256HexText(text) {
+  return sha256Hex(new TextEncoder().encode(text).buffer);
+}
+function generateVerificationCode() {
+  // 6 chiffres, dont le premier peut être 0 (padStart) : 1 000 000 combinaisons, code à usage limité
+  // dans le temps (15 min) et en tentatives (voir EMAIL_CODE_MAX_ATTEMPTS), pas un secret cryptographique.
+  return String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
+}
+const EMAIL_CODE_DURATION_MS = 15 * 60 * 1000;
+const EMAIL_CODE_MAX_ATTEMPTS = 8;
 
 // Envoi de l'email de réinitialisation. Fournisseurs pris en charge, dans cet ordre :
 //  1. Brevo (BREVO_API_KEY + EMAIL_SENDER, l'adresse expéditrice validée dans Brevo)
@@ -74,7 +84,20 @@ async function sendResetEmail(env, toEmail, token) {
   const resetUrl = `${env.APP_URL}/?reset_token=${token}`;
   const subject = 'Réinitialisation de votre mot de passe AuditorIA';
   const html = `<p>Cliquez sur ce lien pour choisir un nouveau mot de passe (valable 1 heure) :</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>`;
+  await sendEmail(env, toEmail, subject, html, `[dev] Lien de réinitialisation pour ${toEmail}: ${resetUrl}`);
+}
 
+// Email de confirmation à l'inscription : un code à 6 chiffres, valable 15 minutes, entré dans l'appli
+// (pas un lien à cliquer) pour rester dans le même onglet juste après l'inscription.
+async function sendVerificationEmail(env, toEmail, code) {
+  const subject = 'Confirmez votre adresse email — AuditorIA';
+  const html = `<p>Voici votre code de confirmation (valable 15 minutes) :</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">${code}</p><p>Si vous n'êtes pas à l'origine de cette inscription, ignorez cet email.</p>`;
+  await sendEmail(env, toEmail, subject, html, `[dev] Code de confirmation pour ${toEmail}: ${code}`);
+}
+
+// Envoyeur générique (Brevo, sinon Resend, sinon simple log en développement) — factorisé pour que
+// le lien de réinitialisation et le code de confirmation d'inscription partagent le même mécanisme.
+async function sendEmail(env, toEmail, subject, html, devLogFallback) {
   if (env.BREVO_API_KEY && env.EMAIL_SENDER) {
     const res = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
@@ -105,7 +128,7 @@ async function sendResetEmail(env, toEmail, token) {
     return;
   }
 
-  console.log(`[dev] Lien de réinitialisation pour ${toEmail}: ${resetUrl}`);
+  console.log(devLogFallback || `[dev] Email pour ${toEmail} — ${subject}`);
 }
 
 // Vérifie la session réelle (cookie httpOnly) — remplace le X-User-Id de confiance.
@@ -230,8 +253,20 @@ export default {
         if (await hitRateLimit(db, `signup:${ip}`, 5, DAY)) throw new HttpError(429, "Trop d'inscriptions depuis cette connexion. Réessaie demain.");
         ctx.waitUntil(purgeRateLimits(db));
         const { email, password } = await readJson(request);
-        const userId = await signup(db, email, password);
+        const userId = await signup(db, email, password, ip); // ip : voir "1 compte par IP" dans auth.js
         const token = await createSession(db, userId);
+
+        // Code de confirmation d'email : envoyé en arrière-plan, ne bloque jamais la création du compte
+        // (une panne d'envoi ne doit pas empêcher quelqu'un de s'inscrire).
+        const code = generateVerificationCode();
+        const codeHash = await sha256HexText(code);
+        const now = Date.now();
+        await db.prepare(
+          `INSERT INTO email_verification_codes (user_id, code_hash, attempts, created_at, expires_at) VALUES (?,?,0,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash, attempts = 0, created_at = excluded.created_at, expires_at = excluded.expires_at`
+        ).bind(userId, codeHash, now, now + EMAIL_CODE_DURATION_MS).run();
+        ctx.waitUntil(sendVerificationEmail(env, email.trim().toLowerCase(), code));
+
         return json({ user_id: userId }, 200, { 'Set-Cookie': sessionCookieHeader(token) });
       }
 
@@ -277,15 +312,57 @@ export default {
         return json({ ok: true });
       }
 
+      // POST /auth/verify-email  {code}  — confirme l'email du compte connecté
+      if (url.pathname === '/auth/verify-email' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `verify-email:${userId}`, 15, HOUR)) throw new HttpError(429, 'Trop de tentatives. Réessaie plus tard.');
+        const { code } = await readJson(request);
+        if (typeof code !== 'string' || !code) throw new HttpError(400, 'code requis');
+
+        const row = await db.prepare(`SELECT * FROM email_verification_codes WHERE user_id = ?`).bind(userId).first();
+        if (!row || row.expires_at < Date.now()) throw new HttpError(400, 'Code expiré ou introuvable. Demande-en un nouveau.');
+        if (row.attempts >= EMAIL_CODE_MAX_ATTEMPTS) throw new HttpError(429, 'Trop de tentatives pour ce code. Demande-en un nouveau.');
+
+        const codeHash = await sha256HexText(code.trim());
+        if (codeHash !== row.code_hash) {
+          await db.prepare(`UPDATE email_verification_codes SET attempts = attempts + 1 WHERE user_id = ?`).bind(userId).run();
+          throw new HttpError(400, 'Code incorrect.');
+        }
+
+        await db.prepare(`UPDATE users SET email_verified = 1 WHERE id = ?`).bind(userId).run();
+        await db.prepare(`DELETE FROM email_verification_codes WHERE user_id = ?`).bind(userId).run();
+        return json({ ok: true });
+      }
+
+      // POST /auth/resend-verification — renvoie un nouveau code (remplace l'ancien)
+      if (url.pathname === '/auth/resend-verification' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `resend-verify:${userId}`, 5, HOUR)) throw new HttpError(429, 'Trop de demandes. Réessaie plus tard.');
+        const user = await db.prepare(`SELECT email, email_verified FROM users WHERE id = ?`).bind(userId).first();
+        if (!user) throw new HttpError(401, 'non authentifié');
+        if (user.email_verified) return json({ ok: true }); // déjà confirmé : rien à renvoyer
+
+        const code = generateVerificationCode();
+        const codeHash = await sha256HexText(code);
+        const now = Date.now();
+        await db.prepare(
+          `INSERT INTO email_verification_codes (user_id, code_hash, attempts, created_at, expires_at) VALUES (?,?,0,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash, attempts = 0, created_at = excluded.created_at, expires_at = excluded.expires_at`
+        ).bind(userId, codeHash, now, now + EMAIL_CODE_DURATION_MS).run();
+        ctx.waitUntil(sendVerificationEmail(env, user.email, code));
+        return json({ ok: true });
+      }
+
       // --- Paiements (NOWPayments) ---
 
-      // POST /create-invoice  {plan, success_url}  — protégé : la commande est liée au compte connecté
+      // POST /create-invoice  {plan, cycle, success_url}  — protégé : la commande est liée au compte connecté.
+      // Le prix vient de PLANS[plan][cycle] côté serveur (payments.js) : le client choisit, mais ne fixe pas le montant.
       if (url.pathname === '/create-invoice' && request.method === 'POST') {
         const userId = await getUserId(request, env);
         if (await hitRateLimit(db, `invoice:${userId}`, 10, HOUR)) throw new HttpError(429, 'Trop de demandes de paiement. Réessaie plus tard.');
-        const { plan, success_url } = await readJson(request);
+        const { plan, cycle, success_url } = await readJson(request);
         const invoice = await createInvoice(
-          db, userId, plan,
+          db, userId, plan, cycle,
           safeSuccessUrl(success_url, env),
           url.origin, env.NOWPAYMENTS_API_KEY, env.IPN_SECRET
         );
@@ -336,13 +413,13 @@ export default {
         return json({ ok: true });
       }
 
-      // GET /me — identité du compte connecté (affichée dans le menu du dashboard). Uniquement l'email :
-      // aucune autre donnée de compte, jamais le hash du mot de passe.
+      // GET /me — identité du compte connecté (menu du dashboard, bandeau de confirmation d'email).
+      // Email et statut de vérification uniquement : jamais le hash du mot de passe ni l'IP d'inscription.
       if (url.pathname === '/me' && request.method === 'GET') {
         const userId = await getUserId(request, env);
-        const user = await db.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
+        const user = await db.prepare(`SELECT email, email_verified FROM users WHERE id = ?`).bind(userId).first();
         if (!user) throw new HttpError(401, 'non authentifié');
-        return json({ email: user.email });
+        return json({ email: user.email, email_verified: !!user.email_verified });
       }
 
       // --- Documents & analyse (routes protégées) ---
@@ -350,6 +427,12 @@ export default {
       // POST /upload  — multipart/form-data: file, kind
       if (url.pathname === '/upload' && request.method === 'POST') {
         const userId = await getUserId(request, env);
+
+        // Email non confirmé : l'analyse de documents (donc le coût Gemini et le crédit consommé) est
+        // bloquée jusqu'à confirmation. Le reste du compte (connexion, consultation) reste accessible.
+        const verifyRow = await db.prepare(`SELECT email_verified FROM users WHERE id = ?`).bind(userId).first();
+        if (verifyRow && !verifyRow.email_verified) throw new HttpError(403, 'email_not_verified');
+
         if (await hitRateLimit(db, `upload:${userId}`, 60, HOUR)) throw new HttpError(429, "Trop d'envois en peu de temps. Réessaie plus tard.");
 
         // 1. Validation AVANT de toucher au quota : une requête invalide ne coûte plus un essai gratuit.
@@ -500,6 +583,80 @@ export default {
            FROM contracts WHERE user_id = ? ORDER BY (end_date IS NULL), end_date ASC`
         ).bind(userId).all();
         return json({ contracts: results });
+      }
+
+      // GET /kyc/status — profil KYC du compte connecté (sans les fichiers : juste de quoi préremplir
+      // le formulaire et afficher où en est la vérification). Absence de ligne = jamais soumis.
+      if (url.pathname === '/kyc/status' && request.method === 'GET') {
+        const userId = await getUserId(request, env);
+        const row = await db.prepare(
+          `SELECT first_name, last_name, address_line, city, postal_code, country,
+                  id_document_filename, proof_address_filename, status, submitted_at, reviewer_note
+           FROM kyc_profiles WHERE user_id = ?`
+        ).bind(userId).first();
+        return json({ profile: row || null });
+      }
+
+      // POST /kyc/submit — multipart/form-data : first_name, last_name, address_line, city, postal_code,
+      // country, id_document (fichier), proof_address (fichier). Enregistre le profil en statut "pending" :
+      // ceci ne fait que RECEVOIR et stocker les documents, il n'y a aucune vérification automatisée
+      // (pas de fournisseur KYC branché) — un humain doit les examiner pour faire passer le statut à
+      // "approved" ou "rejected" (pas d'écran d'administration fourni pour l'instant).
+      if (url.pathname === '/kyc/submit' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `kyc:${userId}`, 5, DAY)) throw new HttpError(429, "Trop de soumissions. Réessaie demain.");
+
+        let form;
+        try { form = await request.formData(); } catch { throw new HttpError(400, 'envoi invalide'); }
+
+        const field = (name, max) => {
+          const v = form.get(name);
+          if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, `${name} requis`);
+          return v.trim().slice(0, max);
+        };
+        const firstName = field('first_name', 100);
+        const lastName = field('last_name', 100);
+        const addressLine = field('address_line', 200);
+        const city = field('city', 100);
+        const postalCode = field('postal_code', 20);
+        const country = field('country', 100);
+
+        const KYC_ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png']; // pièce d'identité et justificatif : souvent des photos, pas seulement du PDF
+        async function readKycFile(name, label) {
+          const file = form.get(name);
+          if (!file || typeof file === 'string') throw new HttpError(400, `${label} requis`);
+          if (file.size === 0) throw new HttpError(400, `${label} : fichier vide`);
+          if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `${label} trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+          const filename = String(file.name || label).slice(0, 200);
+          const ext = (filename.split('.').pop() || '').toLowerCase();
+          if (!KYC_ALLOWED_EXT.includes(ext)) throw new HttpError(415, `${label} : formats acceptés PDF, JPG, PNG.`);
+          const buffer = await file.arrayBuffer();
+          return { base64: arrayBufferToBase64(buffer), filename };
+        }
+        const idDoc = await readKycFile('id_document', "Pièce d'identité");
+        const proofAddr = await readKycFile('proof_address', 'Justificatif de domicile');
+
+        const now = Date.now();
+        // Une nouvelle soumission remplace la précédente et repart en statut "pending" : un ancien refus
+        // ou une ancienne approbation ne s'applique plus à de nouveaux documents.
+        await db.prepare(
+          `INSERT INTO kyc_profiles
+             (user_id, first_name, last_name, address_line, city, postal_code, country,
+              id_document_base64, id_document_filename, proof_address_base64, proof_address_filename,
+              status, submitted_at, reviewed_at, reviewer_note)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?,NULL,NULL)
+           ON CONFLICT(user_id) DO UPDATE SET
+             first_name = excluded.first_name, last_name = excluded.last_name, address_line = excluded.address_line,
+             city = excluded.city, postal_code = excluded.postal_code, country = excluded.country,
+             id_document_base64 = excluded.id_document_base64, id_document_filename = excluded.id_document_filename,
+             proof_address_base64 = excluded.proof_address_base64, proof_address_filename = excluded.proof_address_filename,
+             status = 'pending', submitted_at = excluded.submitted_at, reviewed_at = NULL, reviewer_note = NULL`
+        ).bind(
+          userId, firstName, lastName, addressLine, city, postalCode, country,
+          idDoc.base64, idDoc.filename, proofAddr.base64, proofAddr.filename, now
+        ).run();
+
+        return json({ ok: true, status: 'pending' });
       }
 
       // GET /summary — trésorerie, économies, flux calculés à partir des vraies transactions et alertes stockées.

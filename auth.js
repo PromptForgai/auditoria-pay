@@ -55,7 +55,7 @@ function checkNewPassword(password) {
   if (password.length > MAX_PASSWORD) throw new HttpError(400, `mot de passe trop long (${MAX_PASSWORD} caractères maximum)`);
 }
 
-export async function signup(db, email, password) {
+export async function signup(db, email, password, signupIp) {
   if (typeof email !== 'string' || typeof password !== 'string') throw new HttpError(400, 'email et mot de passe requis');
   email = email.trim().toLowerCase();
   if (!isValidEmail(email)) throw new HttpError(400, 'email invalide');
@@ -64,15 +64,25 @@ export async function signup(db, email, password) {
   const existing = await db.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
   if (existing) throw new HttpError(409, 'un compte existe déjà avec cet email');
 
+  // "1 compte par IP" : un index UNIQUE sur signup_ip tranche même en cas de deux inscriptions
+  // simultanées depuis la même connexion (une simple lecture préalable ne suffirait pas à l'empêcher).
+  if (signupIp) {
+    const existingIp = await db.prepare(`SELECT id FROM users WHERE signup_ip = ?`).bind(signupIp).first();
+    if (existingIp) throw new HttpError(409, "un compte existe déjà depuis cette connexion internet");
+  }
+
   const { hash, salt } = await hashPassword(password);
   const userId = crypto.randomUUID();
   try {
     await db.prepare(
-      `INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?,?,?,?,?)`
-    ).bind(userId, email, hash, salt, Date.now()).run();
+      `INSERT INTO users (id, email, password_hash, password_salt, signup_ip, created_at) VALUES (?,?,?,?,?,?)`
+    ).bind(userId, email, hash, salt, signupIp || null, Date.now()).run();
   } catch (err) {
-    // deux inscriptions simultanées avec le même email : la contrainte UNIQUE tranche
-    if (/UNIQUE/i.test(String(err.message))) throw new HttpError(409, 'un compte existe déjà avec cet email');
+    const msg = String(err.message);
+    // Deux inscriptions simultanées avec le même email, ou depuis la même IP : la contrainte UNIQUE
+    // correspondante tranche (la vérification ci-dessus n'empêche pas une vraie course entre requêtes).
+    if (/UNIQUE/i.test(msg) && /signup_ip/i.test(msg)) throw new HttpError(409, "un compte existe déjà depuis cette connexion internet");
+    if (/UNIQUE/i.test(msg)) throw new HttpError(409, 'un compte existe déjà avec cet email');
     throw err;
   }
   return userId;
