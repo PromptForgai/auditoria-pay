@@ -12,6 +12,7 @@ import {
 } from './auth.js';
 import { HttpError } from './errors.js';
 import { hitRateLimit, clientIp, purgeRateLimits } from './ratelimit.js';
+import { createDiditSession, verifyDiditWebhook, mapDiditStatus } from './kyc_didit.js';
 
 const MINUTE = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
 
@@ -591,16 +592,18 @@ export default {
         const userId = await getUserId(request, env);
         const row = await db.prepare(
           `SELECT first_name, last_name, address_line, city, postal_code, country,
-                  id_document_filename, proof_address_filename, status, submitted_at, reviewer_note
+                  proof_address_filename, status, submitted_at, reviewer_note,
+                  identity_status, didit_status, identity_verified_at
            FROM kyc_profiles WHERE user_id = ?`
         ).bind(userId).first();
         return json({ profile: row || null });
       }
 
       // POST /kyc/submit — multipart/form-data : first_name, last_name, address_line, city, postal_code,
-      // country, id_document (fichier), proof_address (fichier). Enregistre le profil en statut "pending" :
-      // ceci ne fait que RECEVOIR et stocker les documents, il n'y a aucune vérification automatisée
-      // (pas de fournisseur KYC branché) — un humain doit les examiner pour faire passer le statut à
+      // country, proof_address (fichier). La pièce d'identité n'est plus demandée ici : elle est
+      // vérifiée automatiquement via Didit (voir /kyc/didit/start et /kyc/didit/webhook plus bas).
+      // Le justificatif de domicile, lui, reste reçu et stocké pour une revue manuelle (statut "pending") :
+      // ceci ne fait que RECEVOIR le document, un humain doit l'examiner pour faire passer "status" à
       // "approved" ou "rejected" (pas d'écran d'administration fourni pour l'instant).
       if (url.pathname === '/kyc/submit' && request.method === 'POST') {
         const userId = await getUserId(request, env);
@@ -621,42 +624,89 @@ export default {
         const postalCode = field('postal_code', 20);
         const country = field('country', 100);
 
-        const KYC_ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png']; // pièce d'identité et justificatif : souvent des photos, pas seulement du PDF
-        async function readKycFile(name, label) {
-          const file = form.get(name);
-          if (!file || typeof file === 'string') throw new HttpError(400, `${label} requis`);
-          if (file.size === 0) throw new HttpError(400, `${label} : fichier vide`);
-          if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `${label} trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
-          const filename = String(file.name || label).slice(0, 200);
-          const ext = (filename.split('.').pop() || '').toLowerCase();
-          if (!KYC_ALLOWED_EXT.includes(ext)) throw new HttpError(415, `${label} : formats acceptés PDF, JPG, PNG.`);
-          const buffer = await file.arrayBuffer();
-          return { base64: arrayBufferToBase64(buffer), filename };
-        }
-        const idDoc = await readKycFile('id_document', "Pièce d'identité");
-        const proofAddr = await readKycFile('proof_address', 'Justificatif de domicile');
+        const KYC_ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png']; // souvent une photo, pas seulement un PDF
+        const proofFile = form.get('proof_address');
+        if (!proofFile || typeof proofFile === 'string') throw new HttpError(400, 'Justificatif de domicile requis');
+        if (proofFile.size === 0) throw new HttpError(400, 'Justificatif de domicile : fichier vide');
+        if (proofFile.size > MAX_FILE_BYTES) throw new HttpError(413, `Justificatif de domicile trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+        const proofFilename = String(proofFile.name || 'proof_address').slice(0, 200);
+        const proofExt = (proofFilename.split('.').pop() || '').toLowerCase();
+        if (!KYC_ALLOWED_EXT.includes(proofExt)) throw new HttpError(415, 'Justificatif de domicile : formats acceptés PDF, JPG, PNG.');
+        const proofAddr = { base64: arrayBufferToBase64(await proofFile.arrayBuffer()), filename: proofFilename };
 
         const now = Date.now();
         // Une nouvelle soumission remplace la précédente et repart en statut "pending" : un ancien refus
-        // ou une ancienne approbation ne s'applique plus à de nouveaux documents.
+        // ou une ancienne approbation ne s'applique plus à un nouveau document. La vérification d'identité
+        // (identity_status, didit_*) n'est jamais touchée ici : c'est un sujet distinct.
         await db.prepare(
           `INSERT INTO kyc_profiles
              (user_id, first_name, last_name, address_line, city, postal_code, country,
-              id_document_base64, id_document_filename, proof_address_base64, proof_address_filename,
-              status, submitted_at, reviewed_at, reviewer_note)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?,NULL,NULL)
+              proof_address_base64, proof_address_filename, status, submitted_at, reviewed_at, reviewer_note)
+           VALUES (?,?,?,?,?,?,?,?,?,'pending',?,NULL,NULL)
            ON CONFLICT(user_id) DO UPDATE SET
              first_name = excluded.first_name, last_name = excluded.last_name, address_line = excluded.address_line,
              city = excluded.city, postal_code = excluded.postal_code, country = excluded.country,
-             id_document_base64 = excluded.id_document_base64, id_document_filename = excluded.id_document_filename,
              proof_address_base64 = excluded.proof_address_base64, proof_address_filename = excluded.proof_address_filename,
              status = 'pending', submitted_at = excluded.submitted_at, reviewed_at = NULL, reviewer_note = NULL`
         ).bind(
           userId, firstName, lastName, addressLine, city, postalCode, country,
-          idDoc.base64, idDoc.filename, proofAddr.base64, proofAddr.filename, now
+          proofAddr.base64, proofAddr.filename, now
         ).run();
 
         return json({ ok: true, status: 'pending' });
+      }
+
+      // POST /kyc/didit/start — crée une session de vérification d'identité Didit et renvoie son URL.
+      // Le navigateur est ensuite redirigé vers cette URL (window.location.href) : la vérification se
+      // déroule entièrement chez Didit, notre clé API ne quitte jamais le serveur.
+      if (url.pathname === '/kyc/didit/start' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        if (await hitRateLimit(db, `didit-start:${userId}`, 10, DAY)) throw new HttpError(429, "Trop de tentatives. Réessaie demain.");
+
+        const callbackUrl = `${env.APP_URL}/?didit_return=1`;
+        const { url: sessionUrl, sessionId } = await createDiditSession(userId, callbackUrl, env.DIDIT_API_KEY);
+
+        const now = Date.now();
+        // S'assure qu'une ligne existe (le client a pu ne jamais encore soumis de justificatif de
+        // domicile) sans toucher aux colonnes de ce dernier si la ligne existe déjà.
+        await db.prepare(
+          `INSERT INTO kyc_profiles (user_id, status, submitted_at, identity_status, didit_session_id)
+           VALUES (?, 'pending', ?, 'pending', ?)
+           ON CONFLICT(user_id) DO UPDATE SET identity_status = 'pending', didit_session_id = excluded.didit_session_id`
+        ).bind(userId, now, sessionId).run();
+
+        return json({ url: sessionUrl });
+      }
+
+      // POST /kyc/didit/webhook — appelé par les serveurs Didit, jamais par le navigateur du client.
+      // Authentifié par signature HMAC (X-Signature-V2) + fraîcheur de l'horodatage, pas par cookie :
+      // il n'y a pas de session ici, exactement comme pour /ipn (NOWPayments).
+      if (url.pathname === '/kyc/didit/webhook' && request.method === 'POST') {
+        const rawBody = await request.text();
+        const sig = request.headers.get('x-signature-v2');
+        const ts = request.headers.get('x-timestamp');
+        const payload = await verifyDiditWebhook(rawBody, sig, ts, env.DIDIT_WEBHOOK_SECRET);
+        if (!payload) return new Response('signature invalide ou expirée', { status: 401 });
+
+        // Anti-rejeu : Didit peut renvoyer le même évènement plusieurs fois.
+        try {
+          await db.prepare(`INSERT INTO didit_webhook_events (event_id, received_at) VALUES (?, ?)`)
+            .bind(payload.event_id, Date.now()).run();
+        } catch (err) {
+          if (/UNIQUE/i.test(String(err.message))) return new Response('ok (déjà traité)', { status: 200 });
+          throw err;
+        }
+
+        const userId = payload.vendor_data; // notre propre user_id, transmis à la création de la session
+        const identityStatus = mapDiditStatus(payload.status);
+        if (userId) {
+          await db.prepare(
+            `UPDATE kyc_profiles SET identity_status = ?, didit_status = ?,
+               identity_verified_at = CASE WHEN ? = 'approved' THEN ? ELSE identity_verified_at END
+             WHERE user_id = ?`
+          ).bind(identityStatus, payload.status, identityStatus, Date.now(), userId).run();
+        }
+        return new Response('ok', { status: 200 });
       }
 
       // GET /summary — trésorerie, économies, flux calculés à partir des vraies transactions et alertes stockées.

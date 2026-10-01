@@ -67,7 +67,9 @@ toute route de données renvoie 401. À ne pas casser plus tard :
 | `POST /upload` → `POST /extract/:id` → `POST /analyze` | dépôt, extraction IA, règles |
 | `GET /contracts` | contrats réellement importés (page Contracts du dashboard) |
 | `POST /auth/verify-email`, `POST /auth/resend-verification` | confirmation de l'email par code à 6 chiffres |
-| `POST /kyc/submit`, `GET /kyc/status` | profil KYC : identité + justificatifs (soumission, pas de vérification automatisée) |
+| `POST /kyc/submit`, `GET /kyc/status` | profil KYC : justificatif de domicile (soumission manuelle, revue humaine) |
+| `POST /kyc/didit/start` | crée une session de vérification d'identité Didit, renvoie son URL |
+| `POST /kyc/didit/webhook` | reçoit la décision de Didit (authentifié par signature, pas par session) |
 | `GET /me` | email du compte connecté (menu du dashboard) |
 | `POST /account/change-password` | changement de mot de passe (page Paramètres, session active requise) |
 | `GET /findings`, `POST /findings/:id/status` | alertes ; `status` = `reviewed` ou `dismissed` |
@@ -136,19 +138,54 @@ et par IP) — à surveiller si des clients légitimes se plaignent de ne pas po
 
 ## Profil KYC
 
-La page **Profil** du menu permet au client de renseigner nom, prénom, adresse et d'envoyer une pièce
-d'identité et un justificatif de domicile (PDF, JPG ou PNG, 1,4 Mo max chacun). **Ceci reçoit et stocke
-les documents (statut `pending`), ça ne les vérifie pas** : aucun fournisseur de vérification d'identité
-n'est branché (pas de contrôle d'authenticité, pas de rapprochement visage/pièce). Il faut qu'un humain
-passe le statut à `approved` ou `rejected` directement en base (pas d'écran d'administration fourni) :
+La page **Profil** du menu a deux sections indépendantes :
+
+### Identité (automatisée, via Didit — gratuit)
+
+Le bouton « Vérifier mon identité » crée une session Didit côté serveur (`POST /kyc/didit/start`) et
+redirige le client vers l'interface hébergée par Didit, qui vérifie réellement le document (OCR),
+la vivacité (liveness) et la correspondance du visage. Didit renvoie sa décision via webhook
+(`POST /kyc/didit/webhook`), authentifié par signature HMAC-SHA256 (`X-Signature-V2`, vérifiée avec
+une fenêtre de fraîcheur de 5 minutes, voir `kyc_didit.js`) — **jamais par cookie de session**, exactement
+comme `/ipn` pour les paiements. `identity_status` (`not_started | pending | approved | rejected`) est mis à
+jour automatiquement par ce webhook, jamais par le navigateur du client ni par la redirection de retour
+(qui ne sert qu'à ramener le client sur la page, pas de preuve d'approbation).
+
+Secrets à configurer :
+```bash
+wrangler secret put DIDIT_API_KEY
+wrangler secret put DIDIT_WEBHOOK_SECRET
+```
+`DIDIT_WEBHOOK_SECRET` s'obtient en enregistrant la destination du webhook (une seule fois) :
+```bash
+curl -X POST https://verification.didit.me/v3/webhook/destinations/ \
+  -H "x-api-key: TA_CLE_API_DIDIT" -H "Content-Type: application/json" \
+  -d '{"label":"AuditorIA","url":"https://TON-DOMAINE/kyc/didit/webhook","webhook_version":"v3","subscribed_events":["status.updated"]}'
+```
+La réponse contient `secret_shared_key` : c'est la valeur à passer à `wrangler secret put DIDIT_WEBHOOK_SECRET`.
+
+Le workflow utilisé (`DIDIT_WORKFLOW_ID` dans `kyc_didit.js`) est celui fourni par Didit, nommé « Free
+KYC » : pièce d'identité + détection de vivacité passive + comparaison de visage + analyse d'IP, couvert
+par les 500 vérifications gratuites par mois. Ce n'est pas un secret, il peut rester en dur dans le code.
+
+### Justificatif de domicile (manuel, gratuit)
+
+Resté tel quel : le client envoie un document (PDF, JPG, PNG), stocké en attente (`status = pending`), et
+un humain doit l'examiner pour le faire passer à `approved` ou `rejected` directement en base (pas d'écran
+d'administration) :
 ```sql
 UPDATE kyc_profiles SET status = 'approved', reviewed_at = unixepoch() * 1000 WHERE user_id = '...';
 ```
-**À savoir avant d'ouvrir ça à de vrais clients** : les documents sont stockés en base en base64, comme les
-documents financiers — protégés par les sessions et les requêtes préparées comme le reste de l'app, mais
-sans chiffrement dédié. Des pièces d'identité sont des données personnelles sensibles ; une politique de
-rétention/suppression et, selon où sont tes clients, des obligations légales (RGPD ou équivalent) sont à
-prévoir — ce n'est pas quelque chose qu'un simple choix technique résout.
+La vérification de justificatif de domicile automatisée existe chez Didit (`PROOF_OF_ADDRESS`), mais n'est
+pas incluse dans le pack gratuit (~0,20 $/vérification) — elle n'a donc pas été branchée, pour rester à 0 $.
+
+**À savoir avant d'ouvrir ça à de vrais clients** : le justificatif de domicile reste stocké en base en
+base64, protégé par les sessions et les requêtes préparées comme le reste de l'app, mais sans chiffrement
+dédié. Une politique de rétention/suppression et, selon où sont tes clients, des obligations légales (RGPD
+ou équivalent) restent à prévoir pour ces deux volets — Didit héberge et traite les données d'identité de
+son côté selon sa propre politique, à vérifier sur docs.didit.me.
+
+## Détection automatique du type de document
 
 ## Détection automatique du type de document
 

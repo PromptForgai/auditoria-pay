@@ -191,8 +191,19 @@ CREATE TABLE IF NOT EXISTS kyc_profiles (
   id_document_filename TEXT,
   proof_address_base64 TEXT,
   proof_address_filename TEXT,
-  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected (justificatif de domicile, revu manuellement)
   submitted_at INTEGER NOT NULL,
   reviewed_at INTEGER,
-  reviewer_note TEXT
+  reviewer_note TEXT,
+  -- Vérification d'identité automatisée (Didit) : distincte du "status" ci-dessus.
+  identity_status TEXT NOT NULL DEFAULT 'not_started', -- not_started | pending | approved | rejected
+  didit_session_id TEXT,
+  didit_status TEXT,      -- dernier statut brut renvoyé par Didit (pour le débogage)
+  identity_verified_at INTEGER
+);
+
+-- Anti-rejeu des webhooks Didit : un event_id déjà traité n'est jamais réappliqué.
+CREATE TABLE IF NOT EXISTS didit_webhook_events (
+  event_id TEXT PRIMARY KEY,
+  received_at INTEGER NOT NULL
 );
