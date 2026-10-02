@@ -110,7 +110,6 @@ async function callGemini(systemInstruction, parts, schema, apiKey) {
       generationConfig: {
         temperature: 0,                    // extraction/classification : aucune créativité voulue
         maxOutputTokens: 32768,
-        thinkingConfig: { thinkingLevel: 'minimal' }, // équivalent le plus proche de "pas de réflexion" sur Gemini 3.x (thinkingBudget n'existe plus) ; les modèles Flash 3.x ne permettent pas de la couper complètement
         responseMimeType: 'application/json',
         responseSchema: schema
       }
@@ -121,7 +120,10 @@ async function callGemini(systemInstruction, parts, schema, apiKey) {
     // Le détail (souvent verbeux, parfois sensible) reste dans les logs du Worker, pas dans la réponse au client.
     console.error(`Échec appel Gemini (${res.status}):`, (await res.text()).slice(0, 1000));
     if (res.status === 429 || res.status === 503) throw new HttpError(503, "Le service d'analyse est saturé, réessaie dans une minute.");
-    if (res.status === 400) throw new HttpError(422, "Ce document n'a pas pu être lu (fichier corrompu ou protégé ?).");
+    // Un 400 de Gemini signifie le plus souvent que la requête elle-même est mal formée (modèle,
+    // paramètres...), pas forcément que le document est en cause — d'où un message neutre côté client.
+    // Le détail exact (loggé ci-dessus) est ce qu'il faut regarder pour diagnostiquer la vraie cause.
+    if (res.status === 400) throw new HttpError(422, "Ce document n'a pas pu être traité par le service d'analyse. Si cela se reproduit sur plusieurs fichiers différents, contacte le support.");
     throw new HttpError(502, "Le service d'analyse est momentanément indisponible.");
   }
 
