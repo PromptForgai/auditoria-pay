@@ -521,10 +521,10 @@ export default {
           // qu'un relevé bancaire (évite un appel Gemini inutile) ; un PDF est soumis à la classification.
           let kind = doc.kind;
           if (kind === 'auto') {
-            kind = isPdf ? await classifyDocument(input, env.GEMINI_API_KEY) : 'bank_statement';
+            kind = isPdf ? await classifyDocument(input, env.OPENROUTER_API_KEY, env.APP_URL) : 'bank_statement';
           }
 
-          const fields = await extractDocument(kind, input, env.GEMINI_API_KEY);
+          const fields = await extractDocument(kind, input, env.OPENROUTER_API_KEY, env.APP_URL);
           const statements = buildStatements(db, documentId, userId, kind, fields);
 
           // Tout ou rien : extraction brute + lignes normalisées + statut "extracted" (et type déterminé

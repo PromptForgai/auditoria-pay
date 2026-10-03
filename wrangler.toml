@@ -25,7 +25,7 @@ database_id = "067dfe5b-d3f0-4092-8e48-ad44551297de"
 enabled = true
 
 # Secrets, ne pas mettre en clair ici :
-# wrangler secret put GEMINI_API_KEY
+# wrangler secret put OPENROUTER_API_KEY
 # wrangler secret put NOWPAYMENTS_API_KEY
 # wrangler secret put IPN_SECRET
 # Email de réinitialisation (optionnel, un seul des deux suffit) :

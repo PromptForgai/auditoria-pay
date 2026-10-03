@@ -10,7 +10,7 @@ wrangler.toml      config (main = "index.js", assets = ./public, base D1)
 index.js           routes HTTP
 auth.js            comptes, sessions, mot de passe oublié
 payments.js        NOWPayments, abonnement, quota d'essais gratuits
-extraction.js      extraction Gemini (PDF/CSV → champs structurés)
+extraction.js      extraction via OpenRouter (PDF/CSV → champs structurés)
 rules.js           moteur de règles déterministe
 summary.js         chiffres du dashboard
 errors.js          HttpError (erreurs montrables au client)
@@ -38,7 +38,7 @@ Base **neuve** :
 ```bash
 wrangler d1 create auditoria_db        # puis copier le database_id dans wrangler.toml
 wrangler d1 execute auditoria_db --remote --file=schema.sql
-wrangler secret put GEMINI_API_KEY     # gratuit, sans carte : aistudio.google.com → Get API key
+wrangler secret put OPENROUTER_API_KEY # openrouter.ai — accepte la carte, mais aussi la crypto (utile si ta banque ne propose que des cartes prépayées, refusées par Google/OpenAI en direct)
 wrangler secret put NOWPAYMENTS_API_KEY
 wrangler secret put IPN_SECRET
 # email de réinitialisation (optionnel) : BREVO_API_KEY + EMAIL_SENDER, ou RESEND_API_KEY + EMAIL_FROM
@@ -123,7 +123,7 @@ Un code à 6 chiffres (valable 15 minutes, 8 tentatives maximum) est envoyé à 
 mécanisme d'email que la réinitialisation de mot de passe (Brevo, sinon Resend, sinon juste journalisé en
 développement — voir plus bas). Tant que l'email n'est pas confirmé, le compte reste utilisable (connexion,
 consultation) mais **`POST /upload` est bloqué** (403 `email_not_verified`) : pas d'analyse de documents,
-donc pas de coût Gemini ni de crédit consommé, sans confirmation préalable. Un bandeau dans le dashboard
+donc pas de coût OpenRouter ni de crédit consommé, sans confirmation préalable. Un bandeau dans le dashboard
 permet d'entrer le code ou d'en redemander un.
 
 ## 1 compte par adresse IP
@@ -187,17 +187,38 @@ son côté selon sa propre politique, à vérifier sur docs.didit.me.
 
 ## Détection automatique du type de document
 
-## Détection automatique du type de document
-
 Le menu de dépôt propose « Détection automatique (recommandé) », réglage par défaut, en plus des quatre types
 explicites. Elle permet un envoi groupé de fichiers de types différents sans avoir à les trier :
 - un CSV est toujours traité comme un relevé bancaire, sans appel supplémentaire (c'est le seul type CSV du système) ;
-- un PDF est d'abord soumis à un petit appel Gemini de classification (facture / bon de commande / contrat / relevé),
+- un PDF est d'abord soumis à un petit appel de classification (facture / bon de commande / contrat / relevé),
   puis à l'extraction normale avec le schéma correspondant.
 
-Chaque document en mode automatique consomme donc, pour un PDF, un appel Gemini de plus que ci-dessus (extraction
+Chaque document en mode automatique consomme donc, pour un PDF, un appel de plus que ci-dessus (extraction
 classique). Le type détecté est enregistré sur le document (`documents.kind`) : il reste consultable et n'est jamais
 redéterminé aux extractions suivantes.
+
+## Service d'extraction (OpenRouter)
+
+L'extraction et la classification des documents passent par **OpenRouter** (`extraction.js`), une passerelle
+vers de nombreux modèles (OpenAI, Anthropic, Google...) avec un seul compte et un seul paiement — choisie
+après que Google **et** OpenAI ont refusé la carte prépayée utilisée pour ce projet (les deux l'interdisent
+explicitement en direct). OpenRouter, lui, accepte aussi la crypto et Alipay, en plus des cartes classiques.
+
+- **Secret à configurer** : `wrangler secret put OPENROUTER_API_KEY` (clé générée sur openrouter.ai/keys).
+  Il n'y a **pas de palier gratuit** sur OpenRouter : il faut créditer le compte au préalable (openrouter.ai/credits),
+  même une petite somme suffit largement au vu du coût par document (voir plus bas).
+- **Modèle utilisé** : `google/gemini-3.8-flash`, fixé dans `extraction.js` (`OPENROUTER_MODEL`). OpenRouter
+  bascule automatiquement sur un autre fournisseur de ce même modèle (Google Vertex / Google AI Studio) si
+  l'un des deux est en panne — un filet de sécurité contre les 429/503 qu'on n'avait pas avec Gemini en direct.
+  Pour changer de modèle, parcours openrouter.ai/models et remplace cette seule constante.
+- **Coût réel** : pour ce modèle, environ 0,003 à 0,005 $ par document (estimation grossière selon la longueur
+  du fichier), deux fois plus en détection automatique pour un PDF (classification + extraction). OpenRouter
+  prend une petite commission au moment où tu achètes des crédits (pas de marge sur le prix du modèle lui-même).
+- **Pas de sortie structurée stricte** : volontairement, par prudence — un paramètre spécifique à un modèle qui
+  casse au moindre changement de modèle est exactement ce qui s'est produit lors d'un précédent changement de
+  modèle Gemini. À la place, le schéma attendu est inclus en texte dans la consigne envoyée au modèle, avec
+  `response_format: json_object` (juste "réponds en JSON valide", supporté par la quasi-totalité des modèles) et
+  un nettoyage des éventuelles balises markdown avant de parser — moins strict, mais beaucoup plus portable.
 
 ## Plans payants : plafond mensuel
 
@@ -230,7 +251,7 @@ se fait à la lecture, pas par un job qui tournerait en arrière-plan).
 - `success_url` est limité à ton domaine (`APP_URL`).
 - Quota gratuit : **5 documents par compte** (tous types confondus, sans limite de durée), décomptés de façon atomique à
   l'upload **après** validation du fichier, et remboursés si l'extraction échoue. Il n'y a plus de mode démo chronométré :
-  la valeur se voit sur les vrais documents du client, et le plafond fixe limite les appels Gemini par compte.
+  la valeur se voit sur les vrais documents du client, et le plafond fixe limite les appels à l'IA par compte.
   Pour changer le nombre, modifie `FREE_LIMIT` dans `payments.js` **et** dans `public/index.html` (deux endroits).
 
 ## Support (chat en ligne tawk.to)
@@ -252,12 +273,13 @@ automatiquement à tawk.to.
   il faut R2 (qui exige une carte bancaire ou PayPal chez Cloudflare).
 - **Relevés : 1 000 lignes maximum par fichier**, et un fichier trop long est refusé avec un message clair (avant, il était
   tronqué en silence). Le même fichier ne peut pas être importé deux fois (SHA-256), ce qui évite de doubler les transactions.
-- **Gemini gratuit** : limité en débit (une 429 devient un « service saturé, réessaie » et l'essai est remboursé) et les
-  données du tier gratuit peuvent servir à améliorer les modèles de Google : à dire à tes clients.
+- **Service d'analyse (OpenRouter)** : une 429/503 du modèle devient « service saturé, réessaie » et l'essai est
+  remboursé automatiquement. Le crédit OpenRouter est une vraie consommation payante (pas de palier gratuit) : surveille
+  le solde sur openrouter.ai/settings/credits, surtout avec la détection automatique qui double le nombre d'appels par PDF.
 - **Limitation de débit** : login (10 essais/15 min par email, 30 par IP), inscription (5/jour par IP), mot de passe oublié,
   reset, upload, analyse. Contrepartie connue : quelqu'un peut ralentir la connexion d'un email en le martelant.
 - **Pas de vérification d'email** à l'inscription : la limite par IP (5 comptes/jour) freine les comptes jetables, sans les empêcher. Pire cas : 25 documents gratuits par jour et par connexion.
-- Les erreurs internes (SQL, Gemini, config) sont écrites dans les logs du Worker (`[observability]` activé) et jamais
+- Les erreurs internes (SQL, OpenRouter, config) sont écrites dans les logs du Worker (`[observability]` activé) et jamais
   renvoyées au navigateur.
 - Le front échappe tout le texte issu de documents avant de l'afficher (un PDF piégé ne peut plus injecter de HTML).
 
