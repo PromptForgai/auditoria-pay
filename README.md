@@ -188,14 +188,15 @@ son côté selon sa propre politique, à vérifier sur docs.didit.me.
 ## Détection automatique du type de document
 
 Le menu de dépôt propose « Détection automatique (recommandé) », réglage par défaut, en plus des quatre types
-explicites. Elle permet un envoi groupé de fichiers de types différents sans avoir à les trier :
-- un CSV est toujours traité comme un relevé bancaire, sans appel supplémentaire (c'est le seul type CSV du système) ;
-- un PDF est d'abord soumis à un petit appel de classification (facture / bon de commande / contrat / relevé),
-  puis à l'extraction normale avec le schéma correspondant.
+explicites. Elle permet un envoi groupé de fichiers de types différents sans avoir à les trier : qu'il s'agisse
+d'un PDF ou d'un CSV, le document est d'abord soumis à un petit appel de classification (facture / bon de
+commande / contrat / relevé), puis à l'extraction normale avec le schéma correspondant — un CSV n'est **pas**
+présumé être un relevé bancaire du seul fait de son extension (un export de factures au format CSV, par
+exemple, est classifié comme tel).
 
-Chaque document en mode automatique consomme donc, pour un PDF, un appel de plus que ci-dessus (extraction
-classique). Le type détecté est enregistré sur le document (`documents.kind`) : il reste consultable et n'est jamais
-redéterminé aux extractions suivantes.
+Chaque document en mode automatique consomme donc un appel de plus que ci-dessus (extraction classique), PDF
+comme CSV. Le type détecté est enregistré sur le document (`documents.kind`) : il reste consultable et n'est
+jamais redéterminé aux extractions suivantes.
 
 ## Service d'extraction (OpenRouter)
 
@@ -212,7 +213,7 @@ explicitement en direct). OpenRouter, lui, accepte aussi la crypto et Alipay, en
   l'un des deux est en panne — un filet de sécurité contre les 429/503 qu'on n'avait pas avec Gemini en direct.
   Pour changer de modèle, parcours openrouter.ai/models et remplace cette seule constante.
 - **Coût réel** : pour ce modèle, environ 0,003 à 0,005 $ par document (estimation grossière selon la longueur
-  du fichier), deux fois plus en détection automatique pour un PDF (classification + extraction). OpenRouter
+  du fichier), deux fois plus en détection automatique (classification + extraction), PDF comme CSV. OpenRouter
   prend une petite commission au moment où tu achètes des crédits (pas de marge sur le prix du modèle lui-même).
 - **Pas de sortie structurée stricte** : volontairement, par prudence — un paramètre spécifique à un modèle qui
   casse au moindre changement de modèle est exactement ce qui s'est produit lors d'un précédent changement de

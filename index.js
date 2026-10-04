@@ -517,11 +517,12 @@ export default {
             ? { pdfBase64: doc.content_base64 }
             : { text: base64ToText(doc.content_base64) }; // CSV/texte
 
-          // Type déterminé automatiquement : un CSV/texte n'est, dans ce système, jamais autre chose
-          // qu'un relevé bancaire (évite un appel Gemini inutile) ; un PDF est soumis à la classification.
+          // Type déterminé automatiquement, que ce soit un PDF ou un CSV : un CSV peut aussi être un
+          // export de factures ou de bons de commande, pas seulement un relevé bancaire — on ne
+          // présume plus de son contenu à partir de son extension.
           let kind = doc.kind;
           if (kind === 'auto') {
-            kind = isPdf ? await classifyDocument(input, env.OPENROUTER_API_KEY, env.APP_URL) : 'bank_statement';
+            kind = await classifyDocument(input, env.OPENROUTER_API_KEY, env.APP_URL);
           }
 
           const fields = await extractDocument(kind, input, env.OPENROUTER_API_KEY, env.APP_URL);
