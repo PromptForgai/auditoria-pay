@@ -84,9 +84,36 @@ toute route de données renvoie 401. À ne pas casser plus tard :
   `known_counterparties`, ni dans une transaction plus ancienne. Seule la **première** apparition d'un IBAN est signalée.
   Au premier import, tout gros virement vers un fournisseur sans facture correspondante sera donc signalé : c'est voulu,
   l'utilisateur les passe en « Ignorer » ou importe les factures.
+- **Changement d'IBAN fournisseur** : l'IBAN d'une facture diffère de celui de la facture précédente du même fournisseur
+  (regroupement par nom, insensible à la casse/espaces). Signal classique de fraude au changement de coordonnées bancaires.
+- **Facture en double** : même fournisseur, même numéro de facture sur deux documents distincts — détecté dès l'import,
+  avant même qu'un paiement n'ait lieu. Différent du « paiement en double » ci-dessus (qui regarde les transactions bancaires).
+- **Fractionnement de factures** (« structuring ») : au moins 2 factures du même fournisseur, le même jour, chacune sous
+  5 000 € (`checkInvoiceSplitting`, seuil ajustable), dont la somme dépasse ce seuil — technique classique pour contourner
+  un plafond d'approbation interne.
+- **Montant inhabituel pour un bénéficiaire connu** : une sortie vers un IBAN *déjà vu* plus de 3× supérieure (seuil
+  ajustable) à la moyenne historique de ce bénéficiaire (minimum 3 transactions antérieures). Complète la règle de l'IBAN
+  inconnu, qui ne couvre pas le cas d'un bénéficiaire habituel dont le montant devient brusquement anormal. Limite connue :
+  la moyenne inclut la transaction elle-même (pas de fenêtre l'excluant), ce qui amortit un peu le signal — accepté en
+  échange d'une seule requête SQL, sans explosion du nombre de lectures.
 
 Chaque constat a une empreinte (`findings.fingerprint`, index unique) : relancer `/analyze` ne crée jamais de doublon, et une
 alerte ignorée ne revient pas.
+
+Ce sont des règles **réellement distinctes**, pas des centaines de variantes d'un même contrôle : un outil d'audit sérieux
+tourne généralement autour de ce même ordre de grandeur (15-30 contrôles distincts), pas des centaines.
+
+## Email d'alerte
+
+Après chaque `/analyze` qui crée au moins un nouveau constat, un email est envoyé à l'adresse du compte, dans sa langue
+préférée (`users.lang`, `fr` ou `en`, mise à jour automatiquement par `POST /account/lang` à chaque changement de langue
+dans l'interface). Il liste les anomalies **nouvellement créées par cette analyse précise** (pas le total des alertes
+ouvertes), avec le même mécanisme d'envoi que la confirmation d'email et la réinitialisation de mot de passe (Brevo, sinon
+Resend, sinon juste journalisé en développement). Sans clé email configurée, l'alerte n'est donc visible que dans les
+logs du Worker, jamais perdue pour autant côté dashboard.
+
+**Ce qui n'existe toujours pas** : SMS, notification push, ou email récapitulatif périodique (quotidien/hebdomadaire) pour
+les alertes non critiques qu'un client n'aurait pas encore consultées.
 
 ## Métriques du dashboard (`summary.js`)
 

@@ -96,6 +96,31 @@ async function sendVerificationEmail(env, toEmail, code) {
   await sendEmail(env, toEmail, subject, html, `[dev] Code de confirmation pour ${toEmail}: ${code}`);
 }
 
+// Email d'alerte envoyé après une analyse qui a trouvé de nouvelles anomalies (voir /analyze) — sans
+// ça, un client qui ne revient pas sur le site ne découvrirait une anomalie que des semaines plus
+// tard, par hasard. findings = les constats nouvellement créés par CETTE analyse (pas le total des
+// alertes ouvertes), pour que l'email corresponde exactement à ce que le client vient de voir en toast.
+async function sendAnomalyAlertEmail(env, toEmail, lang, findings) {
+  const fr = lang !== 'en';
+  const nb = findings.length;
+  const nbCritical = findings.filter(f => f.type === 'critical').length;
+  const subject = fr
+    ? `${nb} anomalie${nb > 1 ? 's' : ''} détectée${nb > 1 ? 's' : ''}${nbCritical ? `, dont ${nbCritical} critique${nbCritical > 1 ? 's' : ''}` : ''} — AuditorIA`
+    : `${nb} anomal${nb > 1 ? 'ies' : 'y'} detected${nbCritical ? `, ${nbCritical} critical` : ''} — AuditorIA`;
+  // Titre et description viennent de documents importés par le client lui-même (donnée qu'il contrôle,
+  // mais jamais interprétée comme du HTML) : échappement avant insertion, comme côté dashboard.
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const items = findings.slice(0, 10).map(f =>
+    `<li><strong>${esc(f.title)}</strong>${f.type === 'critical' ? (fr ? ' (critique)' : ' (critical)') : ''} — ${esc(f.description)}</li>`
+  ).join('');
+  const more = nb > 10 ? `<p>${fr ? `… et ${nb - 10} de plus.` : `… and ${nb - 10} more.`}</p>` : '';
+  const dashboardUrl = `${env.APP_URL}/?`; // page d'accueil : redemande une connexion si la session a expiré, par sécurité
+  const html = fr
+    ? `<p>${nb} nouvelle${nb > 1 ? 's' : ''} anomalie${nb > 1 ? 's' : ''} détectée${nb > 1 ? 's' : ''} sur tes documents :</p><ul>${items}</ul>${more}<p><a href="${dashboardUrl}">Voir le détail sur AuditorIA</a></p>`
+    : `<p>${nb} new anomal${nb > 1 ? 'ies' : 'y'} detected on your documents:</p><ul>${items}</ul>${more}<p><a href="${dashboardUrl}">View details on AuditorIA</a></p>`;
+  await sendEmail(env, toEmail, subject, html, `[dev] Alerte anomalies pour ${toEmail}: ${nb} (${nbCritical} critiques)`);
+}
+
 // Envoyeur générique (Brevo, sinon Resend, sinon simple log en développement) — factorisé pour que
 // le lien de réinitialisation et le code de confirmation d'inscription partagent le même mécanisme.
 async function sendEmail(env, toEmail, subject, html, devLogFallback) {
@@ -415,12 +440,24 @@ export default {
       }
 
       // GET /me — identité du compte connecté (menu du dashboard, bandeau de confirmation d'email).
-      // Email et statut de vérification uniquement : jamais le hash du mot de passe ni l'IP d'inscription.
+      // Email, statut de vérification et langue préférée uniquement : jamais le hash du mot de passe
+      // ni l'IP d'inscription.
       if (url.pathname === '/me' && request.method === 'GET') {
         const userId = await getUserId(request, env);
-        const user = await db.prepare(`SELECT email, email_verified FROM users WHERE id = ?`).bind(userId).first();
+        const user = await db.prepare(`SELECT email, email_verified, lang FROM users WHERE id = ?`).bind(userId).first();
         if (!user) throw new HttpError(401, 'non authentifié');
-        return json({ email: user.email, email_verified: !!user.email_verified });
+        return json({ email: user.email, email_verified: !!user.email_verified, lang: user.lang || 'fr' });
+      }
+
+      // POST /account/lang  {lang: 'fr'|'en'} — langue utilisée pour les emails automatiques
+      // (alertes, confirmation, réinitialisation). Appelé silencieusement à chaque changement de
+      // langue dans l'interface, tant que le client est connecté.
+      if (url.pathname === '/account/lang' && request.method === 'POST') {
+        const userId = await getUserId(request, env);
+        const { lang } = await readJson(request);
+        if (lang !== 'fr' && lang !== 'en') throw new HttpError(400, 'langue invalide');
+        await db.prepare(`UPDATE users SET lang = ? WHERE id = ?`).bind(lang, userId).run();
+        return json({ ok: true });
       }
 
       // --- Documents & analyse (routes protégées) ---
@@ -551,6 +588,14 @@ export default {
         const userId = await getUserId(request, env);
         if (await hitRateLimit(db, `analyze:${userId}`, 60, HOUR)) throw new HttpError(429, "Trop d'analyses en peu de temps. Réessaie plus tard.");
         const findings = await runAllRules(db, userId);
+
+        // Email d'alerte en arrière-plan (ne retarde jamais la réponse) : seulement s'il y a au moins
+        // une nouveauté, pour ne jamais écrire "0 anomalie détectée" dans un email.
+        if (findings.length > 0) {
+          const user = await db.prepare(`SELECT email, lang FROM users WHERE id = ?`).bind(userId).first();
+          if (user) ctx.waitUntil(sendAnomalyAlertEmail(env, user.email, user.lang || 'fr', findings));
+        }
+
         return json({ findings_created: findings.length, findings });
       }
 

@@ -150,6 +150,113 @@ export async function checkUnusualOutflows(db, userId, unknownThreshold = 5000) 
   }));
 }
 
+// 5. Changement d'IBAN d'un fournisseur entre deux factures — signal classique de fraude au
+// changement de coordonnées bancaires (un fraudeur se fait passer pour un fournisseur connu et
+// annonce un "nouvel IBAN"). LAG() compare chaque facture d'un fournisseur à la précédente du même
+// fournisseur (regroupées par nom, insensible à la casse/espaces), dans l'ordre chronologique.
+export async function checkSupplierIbanChange(db, userId) {
+  const { results } = await db.prepare(
+    `WITH ordered AS (
+       SELECT document_id, invoice_number, supplier_name, supplier_iban, invoice_date,
+              LAG(supplier_iban) OVER (PARTITION BY LOWER(TRIM(supplier_name)) ORDER BY invoice_date, document_id) AS prev_iban,
+              LAG(document_id) OVER (PARTITION BY LOWER(TRIM(supplier_name)) ORDER BY invoice_date, document_id) AS prev_doc
+       FROM invoices
+       WHERE user_id = ? AND supplier_name IS NOT NULL AND supplier_iban IS NOT NULL AND supplier_iban != ''
+     )
+     SELECT * FROM ordered WHERE prev_iban IS NOT NULL AND prev_iban != supplier_iban`
+  ).bind(userId).all();
+
+  return results.map(r => makeFinding(userId, {
+    type: 'critical',
+    rule: 'supplier_iban_change',
+    title: "Changement d'IBAN fournisseur",
+    description: `${r.supplier_name} : nouvel IBAN (${r.supplier_iban}) sur la facture ${r.invoice_number || r.document_id}, différent de l'IBAN utilisé précédemment (${r.prev_iban}). Vérifie ce changement directement auprès du fournisseur avant tout paiement.`,
+    docs: [r.document_id, r.prev_doc],
+    fingerprint: `supplier_iban_change:${r.prev_doc}:${r.document_id}`
+  }));
+}
+
+// 6. Factures en double : même fournisseur, même numéro de facture. Distinct du paiement en double
+// (règle 2) : ici on détecte le doublon dès l'import des factures, avant même qu'un paiement n'ait
+// lieu — ressaisie accidentelle ou double soumission par le fournisseur.
+export async function checkDuplicateInvoiceNumbers(db, userId) {
+  const { results } = await db.prepare(
+    `SELECT a.document_id AS doc1, b.document_id AS doc2, a.invoice_number, a.supplier_name,
+            a.amount AS amt1, b.amount AS amt2, a.currency
+     FROM invoices a JOIN invoices b
+       ON a.user_id = b.user_id AND LOWER(TRIM(a.supplier_name)) = LOWER(TRIM(b.supplier_name))
+       AND a.invoice_number = b.invoice_number AND a.document_id < b.document_id
+     WHERE a.user_id = ? AND a.invoice_number IS NOT NULL AND a.supplier_name IS NOT NULL AND a.supplier_name != ''`
+  ).bind(userId).all();
+
+  return results.map(r => makeFinding(userId, {
+    type: 'warning',
+    rule: 'duplicate_invoice_number',
+    title: 'Facture en double',
+    description: `Le numéro de facture ${r.invoice_number} apparaît deux fois pour ${r.supplier_name} (${r.amt1} et ${r.amt2} ${r.currency}).`,
+    amount_impact: r.amt1 === r.amt2 ? r.amt1 : null,
+    docs: [r.doc1, r.doc2],
+    fingerprint: `duplicate_invoice_number:${r.doc1}:${r.doc2}`
+  }));
+}
+
+// 7. Fractionnement de factures ("structuring") : plusieurs factures du même fournisseur, le même
+// jour, chacune sous le seuil donné, mais dont la somme le dépasse — technique classique pour
+// contourner un seuil d'approbation fixé par l'entreprise.
+export async function checkInvoiceSplitting(db, userId, approvalThreshold = 5000) {
+  const { results } = await db.prepare(
+    `SELECT LOWER(TRIM(supplier_name)) AS supplier_key, supplier_name, invoice_date, currency,
+            COUNT(*) AS cnt, SUM(amount) AS total, GROUP_CONCAT(document_id) AS docs
+     FROM invoices
+     WHERE user_id = ? AND supplier_name IS NOT NULL AND supplier_name != '' AND invoice_date IS NOT NULL AND amount < ?
+     GROUP BY supplier_key, invoice_date, currency
+     HAVING COUNT(*) >= 2 AND SUM(amount) >= ?`
+  ).bind(userId, approvalThreshold, approvalThreshold).all();
+
+  return results.map(r => {
+    const docs = r.docs.split(',');
+    return makeFinding(userId, {
+      type: 'critical',
+      rule: 'invoice_splitting',
+      title: 'Fractionnement de factures suspecté',
+      description: `${r.cnt} factures de ${r.supplier_name} le ${r.invoice_date}, chacune sous ${approvalThreshold} ${r.currency}, pour un total de ${r.total.toFixed(2)} ${r.currency}.`,
+      amount_impact: r.total,
+      docs,
+      fingerprint: `invoice_splitting:${r.supplier_key}:${r.invoice_date}`
+    });
+  });
+}
+
+// 8. Sortie vers un bénéficiaire CONNU mais d'un montant très supérieur à son historique — complète
+// la règle 4 (IBAN inconnu), qui ne couvre pas le cas d'un bénéficiaire habituel mais dont le montant
+// payé devient brusquement anormal. Limite assumée : la moyenne inclut la transaction elle-même (pas
+// de fenêtre excluant la ligne courante), ce qui amortit un peu le signal — en échange d'une seule
+// requête, sans explosion du nombre de lectures. Au moins 3 transactions antérieures exigées pour
+// qu'une moyenne ait un sens.
+export async function checkOutlierTransactionAmount(db, userId, multiplier = 3) {
+  const { results } = await db.prepare(
+    `WITH stats AS (
+       SELECT counterparty_iban, AVG(ABS(amount)) AS avg_amt, COUNT(*) AS cnt
+       FROM bank_transactions
+       WHERE user_id = ? AND amount < 0 AND counterparty_iban IS NOT NULL AND counterparty_iban != ''
+       GROUP BY counterparty_iban
+     )
+     SELECT t.id, t.document_id, t.tx_date, t.amount, t.counterparty_iban, t.counterparty_name, s.avg_amt
+     FROM bank_transactions t JOIN stats s ON s.counterparty_iban = t.counterparty_iban
+     WHERE t.user_id = ? AND t.amount < 0 AND s.cnt >= 3 AND ABS(t.amount) > s.avg_amt * ?`
+  ).bind(userId, userId, multiplier).all();
+
+  return results.map(r => makeFinding(userId, {
+    type: 'warning',
+    rule: 'outlier_transaction_amount',
+    title: 'Montant inhabituel pour ce bénéficiaire',
+    description: `${Math.abs(r.amount).toFixed(2)} € vers ${r.counterparty_name || r.counterparty_iban} le ${r.tx_date}, contre une moyenne habituelle d'environ ${r.avg_amt.toFixed(2)} € pour ce bénéficiaire.`,
+    amount_impact: r.amount,
+    docs: [r.document_id],
+    fingerprint: `outlier_transaction_amount:${r.id}`
+  }));
+}
+
 // Insère les findings par lots. INSERT OR IGNORE + index unique (user_id, fingerprint) :
 // un constat déjà présent (ouvert, revu ou ignoré) n'est jamais recréé.
 // Renvoie uniquement les findings réellement créés.
@@ -177,7 +284,11 @@ export async function runAllRules(db, userId) {
     checkInvoicePoMismatch(db, userId),
     checkDuplicatePayments(db, userId),
     checkContractsExpiring(db, userId),
-    checkUnusualOutflows(db, userId)
+    checkUnusualOutflows(db, userId),
+    checkSupplierIbanChange(db, userId),
+    checkDuplicateInvoiceNumbers(db, userId),
+    checkInvoiceSplitting(db, userId),
+    checkOutlierTransactionAmount(db, userId)
   ])).flat();
   return saveFindings(db, all);
 }

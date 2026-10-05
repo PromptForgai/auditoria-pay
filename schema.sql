@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_salt TEXT NOT NULL,
   signup_ip TEXT,                  -- pour la règle "1 compte par IP" à l'inscription (voir index.js)
   email_verified INTEGER NOT NULL DEFAULT 0,
+  lang TEXT NOT NULL DEFAULT 'fr', -- langue des emails automatiques (alertes, confirmation...) ; mise à jour via PATCH /account/lang
   created_at INTEGER NOT NULL
 );
 
