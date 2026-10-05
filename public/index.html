@@ -596,7 +596,13 @@ function openSupport(){
 }
 const FREE_LIMIT=5,MONTH_MS=30*24*60*60*1000;
 
-function setLang(lang){currentLang=lang;document.documentElement.lang=lang;document.getElementById("langSelect").value=lang;const a=document.getElementById("appLang");if(a)a.value=lang;document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.getAttribute("data-i18n");if(i18n[lang][k]!==undefined)el.innerHTML=i18n[lang][k]});const ap=document.querySelector(".nav-item.active")?.dataset.page;if(ap&&i18n[lang].titles[ap])document.getElementById("page-title").textContent=i18n[lang].titles[ap];renderAlerts();renderContracts();renderKycStatus();renderIdentityStatus();updateSubUI();updatePricingDisplay()}
+function setLang(lang,skipSave){currentLang=lang;document.documentElement.lang=lang;document.getElementById("langSelect").value=lang;const a=document.getElementById("appLang");if(a)a.value=lang;document.querySelectorAll("[data-i18n]").forEach(el=>{const k=el.getAttribute("data-i18n");if(i18n[lang][k]!==undefined)el.innerHTML=i18n[lang][k]});const ap=document.querySelector(".nav-item.active")?.dataset.page;if(ap&&i18n[lang].titles[ap])document.getElementById("page-title").textContent=i18n[lang].titles[ap];renderAlerts();renderContracts();renderKycStatus();renderIdentityStatus();updateSubUI();updatePricingDisplay();if(!skipSave)saveLangPreference(lang)}
+// Langue des emails automatiques (alertes, etc.) : enregistrée en arrière-plan, sans bloquer
+// l'interface et sans rien faire si le client n'est pas connecté (401 silencieusement ignoré).
+async function saveLangPreference(lang){
+  if(!currentUserLoggedIn)return;
+  try{await fetch(API_BASE+"/account/lang",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({lang})})}catch(err){}
+}
 function openLogin(){document.getElementById("loginModal").classList.add("open")}
 function closeLogin(){document.getElementById("loginModal").classList.remove("open")}
 function openSignup(){document.getElementById("signupModal").classList.add("open")}
@@ -609,6 +615,9 @@ let currentUser=null;
 async function loadCurrentUser(){
   try{const r=await fetch(API_BASE+"/me",{credentials:"include"});if(r.ok)currentUser=await r.json()}catch(e){}
   updateUserChip();
+  // Si le client a déjà choisi une langue sur un autre appareil, on l'applique ici — sans renvoyer
+  // cette même valeur au serveur juste après (ce serait un aller-retour inutile).
+  if(currentUser&&currentUser.lang&&currentUser.lang!==currentLang)setLang(currentUser.lang,true);
 }
 function fillSettingsPage(){
   const emailEl=document.getElementById("settingsEmail"),planEl=document.getElementById("settingsPlan");
