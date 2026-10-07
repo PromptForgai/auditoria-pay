@@ -295,10 +295,59 @@ seule page, une fois le chat ouvert le script reste actif jusqu'au rechargement,
 dans tawk.to un message hors-ligne qui collecte l'email du client. Aucune donnée du compte (email, documents) n'est transmise
 automatiquement à tawk.to.
 
+## Fichiers volumineux (R2)
+
+Les fichiers de plus de 1,4 Mo (jusqu'à 10 Mo) sont stockés sur **Cloudflare R2** plutôt qu'en D1, qui ne peut
+structurellement pas aller au-delà d'environ 1,4 Mo de fichier original (limite D1 de 2 Mo par ligne, gonflée d'un tiers
+par l'encodage base64) — ce n'était pas un choix arbitraire, augmenter le chiffre sans changer de stockage aurait
+simplement fait planter les écritures en base.
+
+**Mise en place, une seule fois, avant de déployer le code qui en dépend :**
+```bash
+wrangler r2 bucket create auditoria-documents
+```
+Ceci exige une carte bancaire ou PayPal sur le compte Cloudflare, même pour rester dans le tier gratuit de R2 (même
+restriction que celle rencontrée avec Google Cloud Billing — voir plus haut si ta carte est prépayée). Le binding est déjà
+déclaré dans `wrangler.toml` (`AUDITORIA_BUCKET`) ; il ne reste qu'à créer le bucket lui-même.
+
+**Comportement du code** :
+- Un fichier ≤ 1,4 Mo passe par D1 comme avant, rien ne change pour l'immense majorité des documents.
+- Un fichier plus gros est écrit sur R2 (`userId/documentId/filename` comme clé), avec `documents.content_base64 = ''` et
+  `documents.r2_key` renseigné ; relu et réencodé en base64 à la volée uniquement au moment de l'extraction, jamais stocké
+  tel quel en D1.
+- Si le bucket n'existe pas encore (`AUDITORIA_BUCKET` absent), ces fichiers sont refusés proprement (413, message clair),
+  sans consommer de crédit — le reste du site continue de fonctionner normalement.
+- Un document dont l'extraction échoue est nettoyé des deux côtés : la ligne D1 **et** l'objet R2 (pas d'objet orphelin).
+- Le justificatif de domicile KYC (`/kyc/submit`) reste volontairement sur le seuil D1 simple (1,4 Mo) : ce sont presque
+  toujours des photos d'une seule page, largement en dessous.
+
+## Détection de manipulation (métadonnées PDF)
+
+**Ce qui n'est pas fait, et pourquoi** : détecter de façon fiable si un document est « généré par IA » ou falsifié dans
+l'absolu n'est pas un problème résolu aujourd'hui, même pour les plus grands laboratoires — une fonctionnalité qui
+prétendrait le faire donnerait une fausse confiance (un vrai faux document raté) ou de faux positifs (un vrai client
+accusé à tort), les deux étant pires que l'absence de la fonctionnalité.
+
+**Ce qui est fait, à la place** : une facture, un bon de commande ou un contrat dont les métadonnées techniques du PDF
+(`/Producer`, `/Creator`) mentionnent un logiciel d'édition d'image (Photoshop, GIMP, Illustrator, Canva...) plutôt qu'un
+logiciel de comptabilité ou de bureautique est signalé (`checkSuspiciousPdfSoftware`, `rules.js`) — un indice **objectif**,
+lu directement dans le fichier, pas une opinion d'un modèle d'IA. Ce n'est pas une preuve de fraude en soi (certains
+cabinets scannent/retouchent légitimement un document papier avec ce type d'outil), d'où un type `warning`, jamais
+`critical`, et un libellé qui dit explicitement « mérite une vérification » plutôt que « falsifié ».
+
+Les relevés bancaires ne sont pas concernés par cette règle (souvent des exports ou des scans, moins révélateurs).
+L'extraction (`pdf_metadata.js`) est volontairement **best-effort** : elle scanne le texte brut du PDF à la recherche des
+motifs standards, ce qui couvre la grande majorité des fichiers réels, mais pas ceux dont les métadonnées sont enfermées
+dans un flux d'objets compressé — l'absence de résultat ne prouve rien, la présence d'un logiciel suspect si. Un PDF
+modifié après coup (ouvert puis resauvegardé) garde souvent la trace de l'outil d'origine ET du nouvel outil : les deux
+sont capturés et concaténés, pas seulement le dernier.
+
 ## Limites et sécurité
 
-- **Taille de fichier : 1,4 Mo maximum.** D1 refuse une ligne de plus de 2 Mo et le base64 gonfle d'un tiers. Au-delà,
-  il faut R2 (qui exige une carte bancaire ou PayPal chez Cloudflare).
+- **Taille de fichier : 10 Mo maximum**, en stockage hybride. En dessous de 1,4 Mo (D1 refuse une ligne de plus de 2 Mo,
+  le base64 gonfle d'un tiers), le fichier reste en D1 comme avant, rapide et sans dépendance externe. Au-delà, il passe
+  par R2 (voir la section dédiée plus bas) — si R2 n'est pas configuré, ces fichiers sont refusés avec un message clair
+  plutôt que de casser silencieusement, et aucun crédit n'est consommé dans ce cas.
 - **Relevés : 1 000 lignes maximum par fichier**, et un fichier trop long est refusé avec un message clair (avant, il était
   tronqué en silence). Le même fichier ne peut pas être importé deux fois (SHA-256), ce qui évite de doubler les transactions.
 - **Service d'analyse (OpenRouter)** : une 429/503 du modèle devient « service saturé, réessaie » et l'essai est

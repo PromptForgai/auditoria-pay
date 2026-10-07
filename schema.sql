@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_at INTEGER NOT NULL,
   extracted_at INTEGER,
   credit_used INTEGER NOT NULL DEFAULT 0,  -- 1 si cet envoi a consommé un essai gratuit (pour le rembourser en cas d'échec)
-  content_hash TEXT                         -- SHA-256 du fichier : empêche d'importer deux fois le même document
+  content_hash TEXT,                        -- SHA-256 du fichier : empêche d'importer deux fois le même document
+  pdf_producer TEXT,                        -- métadonnée /Producer du PDF (logiciel ayant généré le fichier final)
+  pdf_creator TEXT,                         -- métadonnée /Creator du PDF (logiciel d'origine du contenu)
+  r2_key TEXT                               -- si renseigné : fichier stocké sur R2 (gros fichiers), pas en base64 ici
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_hash ON documents(user_id, content_hash);
 

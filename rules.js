@@ -10,6 +10,8 @@
 // Nombre de requêtes D1 constant (et non proportionnel au nombre de lignes) : les jointures se font
 // en SQL, et les insertions passent par db.batch().
 
+import { looksLikeImageEditor } from './pdf_metadata.js';
+
 const uuid = () => crypto.randomUUID();
 
 function makeFinding(userId, f) {
@@ -257,6 +259,38 @@ export async function checkOutlierTransactionAmount(db, userId, multiplier = 3) 
   }));
 }
 
+// 9. Métadonnées PDF suspectes : une facture, un bon de commande ou un contrat dont les métadonnées
+// /Producer ou /Creator mentionnent un logiciel d'édition d'image (Photoshop, GIMP...) plutôt qu'un
+// logiciel de comptabilité, de bureautique, ou une imprimante PDF. Un indice de manipulation
+// objectif (lu dans le fichier, pas une opinion de l'IA) — pas une preuve de fraude en soi : certains
+// cabinets scannent/retouchent légitimement un document papier avec ce type d'outil. Le filtrage par
+// motif se fait en JS plutôt qu'en SQL (D1 n'a pas d'extension REGEXP activée par défaut).
+export async function checkSuspiciousPdfSoftware(db, userId) {
+  const { results } = await db.prepare(
+    `SELECT id, filename, kind, pdf_producer, pdf_creator
+     FROM documents
+     WHERE user_id = ? AND status = 'extracted' AND kind IN ('invoice', 'purchase_order', 'contract')
+       AND (pdf_producer IS NOT NULL OR pdf_creator IS NOT NULL)`
+  ).bind(userId).all();
+
+  const findings = [];
+  for (const doc of results) {
+    const hit = looksLikeImageEditor(doc.pdf_producer) ? doc.pdf_producer
+      : looksLikeImageEditor(doc.pdf_creator) ? doc.pdf_creator
+      : null;
+    if (!hit) continue;
+    findings.push(makeFinding(userId, {
+      type: 'warning',
+      rule: 'suspicious_pdf_software',
+      title: 'Métadonnées PDF à vérifier',
+      description: `${doc.filename || 'Ce document'} a été produit ou retouché avec un logiciel d'édition d'image (${hit}) plutôt qu'un logiciel de comptabilité habituel. Ce n'est pas une preuve de falsification, mais mérite une vérification directe auprès de l'émetteur.`,
+      docs: [doc.id],
+      fingerprint: `suspicious_pdf_software:${doc.id}`
+    }));
+  }
+  return findings;
+}
+
 // Insère les findings par lots. INSERT OR IGNORE + index unique (user_id, fingerprint) :
 // un constat déjà présent (ouvert, revu ou ignoré) n'est jamais recréé.
 // Renvoie uniquement les findings réellement créés.
@@ -288,7 +322,8 @@ export async function runAllRules(db, userId) {
     checkSupplierIbanChange(db, userId),
     checkDuplicateInvoiceNumbers(db, userId),
     checkInvoiceSplitting(db, userId),
-    checkOutlierTransactionAmount(db, userId)
+    checkOutlierTransactionAmount(db, userId),
+    checkSuspiciousPdfSoftware(db, userId)
   ])).flat();
   return saveFindings(db, all);
 }

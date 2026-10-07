@@ -13,12 +13,20 @@ import {
 import { HttpError } from './errors.js';
 import { hitRateLimit, clientIp, purgeRateLimits } from './ratelimit.js';
 import { createDiditSession, verifyDiditWebhook, mapDiditStatus } from './kyc_didit.js';
+import { extractPdfInfo } from './pdf_metadata.js';
 
 const MINUTE = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
 
 // Limites d'upload. D1 refuse une ligne de plus de 2 Mo ; le base64 gonfle un fichier d'environ un tiers,
 // donc 1,4 Mo de fichier ≈ 1,87 Mo stockés. Au-delà, il faudrait passer par R2.
-const MAX_FILE_BYTES = 1_400_000;
+// En dessous de ce seuil : stockage direct en D1 (rapide, inchangé). Au-delà : R2 (voir
+// wrangler.toml et README, section "Fichiers volumineux"). 1,4 Mo ≈ juste sous ce qu'une ligne D1
+// peut tenir une fois le fichier encodé en base64 (limite D1 de 2 Mo par ligne, encodage +33%).
+const MAX_FILE_BYTES_D1 = 1_400_000;
+// Plafond global. Au-delà de 10 Mo, le risque de dépasser les limites de taille de requête du modèle
+// d'IA (non documentées précisément par OpenRouter) devient réel — à relever prudemment si besoin,
+// pas un calcul exact comme pour le seuil D1 ci-dessus.
+const MAX_FILE_BYTES = 10_000_000;
 const ALLOWED_KINDS = ['invoice', 'purchase_order', 'contract', 'bank_statement'];
 // 'auto' : le type réel est déterminé document par document à l'extraction (classifyDocument), pour
 // accepter un envoi groupé de fichiers de types différents sans que le client ait à les trier.
@@ -252,12 +260,16 @@ function buildStatements(db, documentId, userId, kind, fields) {
 
 // Supprime un document dont l'extraction a échoué et rend l'essai gratuit consommé à l'upload.
 // La condition sur status garantit qu'on ne rembourse qu'une fois et qu'on ne touche jamais un document déjà extrait.
-async function discardFailedDocument(db, doc, userId) {
+async function discardFailedDocument(db, doc, userId, env) {
   try {
     const del = await db.prepare(
       `DELETE FROM documents WHERE id = ? AND user_id = ? AND status = 'extracting'`
     ).bind(doc.id, userId).run();
     if (del.meta.changes && doc.credit_used) await refundAnalysisCredit(db, userId, doc.credit_used);
+    // Évite un objet R2 orphelin (jamais nettoyé autrement) si ce document y était stocké.
+    if (del.meta.changes && doc.r2_key && env.AUDITORIA_BUCKET) {
+      await env.AUDITORIA_BUCKET.delete(doc.r2_key).catch(err => console.error('Échec suppression R2:', err));
+    }
   } catch (err) {
     console.error('Échec du nettoyage après erreur d\'extraction:', err);
   }
@@ -475,7 +487,7 @@ export default {
 
         // 1. Validation AVANT de toucher au quota : une requête invalide ne coûte plus un essai gratuit.
         const declared = Number(request.headers.get('content-length') || 0);
-        if (declared > MAX_FILE_BYTES + 100_000) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+        if (declared > MAX_FILE_BYTES + 200_000) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(0)} Mo maximum).`);
 
         let form;
         try { form = await request.formData(); } catch { throw new HttpError(400, 'envoi invalide'); }
@@ -484,7 +496,7 @@ export default {
         if (!file || typeof file === 'string' || typeof kind !== 'string') throw new HttpError(400, 'file et kind requis');
         if (!UPLOAD_KINDS.includes(kind)) throw new HttpError(400, 'type de document inconnu');
         if (file.size === 0) throw new HttpError(400, 'fichier vide');
-        if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+        if (file.size > MAX_FILE_BYTES) throw new HttpError(413, `Fichier trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(0)} Mo maximum).`);
 
         const filename = String(file.name || 'document').slice(0, 200);
         const ext = (filename.split('.').pop() || '').toLowerCase();
@@ -510,20 +522,40 @@ export default {
           throw new HttpError(409, 'Ce fichier a déjà été importé.');
         }
 
-        // 3. Quota : décompté seulement maintenant, de façon atomique (voir payments.js).
-        // 'free_limit_reached' (plan gratuit épuisé) et 'plan_limit_reached' (plafond mensuel du plan
-        // payant atteint, ex. Starter) sont deux cas distincts : le front n'affiche pas le même message
-        // ni ne propose le même plan de mise à niveau pour l'un et pour l'autre.
+        // Métadonnées PDF (producteur/créateur) : best-effort, voir pdf_metadata.js. Un CSV n'a pas
+        // ce concept, pdfInfo reste à {producer:null, creator:null} dans ce cas.
+        const pdfInfo = ext === 'pdf' ? extractPdfInfo(buffer) : { producer: null, creator: null };
+
+        // Au-delà du seuil D1, le fichier doit aller sur R2 : vérifié ICI, avant toute écriture, pour
+        // ne jamais décompter un crédit sur un envoi qui ne pourra pas aboutir.
+        const needsR2 = buffer.byteLength > MAX_FILE_BYTES_D1;
+        if (needsR2 && !env.AUDITORIA_BUCKET) {
+          throw new HttpError(413, `Fichier trop volumineux pour le moment (${(MAX_FILE_BYTES_D1 / 1e6).toFixed(1)} Mo maximum tant que le stockage étendu n'est pas activé).`);
+        }
+
+        const documentId = crypto.randomUUID();
+        const r2Key = needsR2 ? `${userId}/${documentId}/${filename}` : null;
+
+        // 3. Quota : décompté seulement maintenant, de façon atomique (voir payments.js) — après la
+        // vérification R2 ci-dessus, pour ne jamais consommer un essai sur un envoi impossible à stocker.
         const credit = await consumeAnalysisCredit(db, userId);
         if (!credit.allowed) return json({ error: credit.reason === 'plan_limit' ? 'plan_limit_reached' : 'free_limit_reached' }, 402);
 
-        // Stockage direct en D1 (pas de R2 : R2 exige une carte bancaire/PayPal pour être activé).
-        const documentId = crypto.randomUUID();
+        if (needsR2) {
+          try {
+            await env.AUDITORIA_BUCKET.put(r2Key, buffer, { httpMetadata: { contentType: ext === 'pdf' ? 'application/pdf' : 'text/csv' } });
+          } catch (err) {
+            await refundAnalysisCredit(db, userId, credit.creditType);
+            console.error('Échec écriture R2:', err);
+            throw new HttpError(502, 'Le stockage du fichier a échoué, réessaie dans un instant.');
+          }
+        }
+
         try {
           await db.prepare(
-            `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at, credit_used, content_hash)
-             VALUES (?,?,?,?,?,?,?,?,?)`
-          ).bind(documentId, userId, kind, arrayBufferToBase64(buffer), filename, 'uploaded', Date.now(), credit.creditType, contentHash).run();
+            `INSERT INTO documents (id, user_id, kind, content_base64, filename, status, uploaded_at, credit_used, content_hash, pdf_producer, pdf_creator, r2_key)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(documentId, userId, kind, needsR2 ? '' : arrayBufferToBase64(buffer), filename, 'uploaded', Date.now(), credit.creditType, contentHash, pdfInfo.producer, pdfInfo.creator, r2Key).run();
         } catch (err) {
           if (credit.creditType) await refundAnalysisCredit(db, userId, credit.creditType);
           throw err;
@@ -550,9 +582,17 @@ export default {
 
         try {
           const isPdf = doc.filename?.toLowerCase().endsWith('.pdf');
+          // Fichier volumineux : relu depuis R2 et réencodé en base64 à la volée (seulement pour la
+          // durée de cet appel, jamais stocké tel quel en D1). doc.r2_key absent = chemin D1 habituel.
+          let contentBase64 = doc.content_base64;
+          if (doc.r2_key) {
+            const obj = await env.AUDITORIA_BUCKET.get(doc.r2_key);
+            if (!obj) throw new Error(`Fichier introuvable sur R2 (clé ${doc.r2_key})`); // config/cohérence interne : jamais montré au client
+            contentBase64 = arrayBufferToBase64(await obj.arrayBuffer());
+          }
           const input = isPdf
-            ? { pdfBase64: doc.content_base64 }
-            : { text: base64ToText(doc.content_base64) }; // CSV/texte
+            ? { pdfBase64: contentBase64 }
+            : { text: base64ToText(contentBase64) }; // CSV/texte
 
           // Type déterminé automatiquement, que ce soit un PDF ou un CSV : un CSV peut aussi être un
           // export de factures ou de bons de commande, pas seulement un relevé bancaire — on ne
@@ -575,7 +615,7 @@ export default {
               .bind(Date.now(), kind, documentId)
           ]);
         } catch (err) {
-          await discardFailedDocument(db, doc, userId); // le client peut réessayer sans avoir perdu un essai
+          await discardFailedDocument(db, doc, userId, env); // le client peut réessayer sans avoir perdu un essai
           throw err;
         }
 
@@ -674,7 +714,9 @@ export default {
         const proofFile = form.get('proof_address');
         if (!proofFile || typeof proofFile === 'string') throw new HttpError(400, 'Justificatif de domicile requis');
         if (proofFile.size === 0) throw new HttpError(400, 'Justificatif de domicile : fichier vide');
-        if (proofFile.size > MAX_FILE_BYTES) throw new HttpError(413, `Justificatif de domicile trop volumineux (${(MAX_FILE_BYTES / 1e6).toFixed(1)} Mo maximum).`);
+        // Reste sur le seuil D1 simple (pas de R2 pour le KYC pour l'instant) : un justificatif de
+        // domicile est presque toujours une photo ou un scan d'une page, largement sous 1,4 Mo.
+        if (proofFile.size > MAX_FILE_BYTES_D1) throw new HttpError(413, `Justificatif de domicile trop volumineux (${(MAX_FILE_BYTES_D1 / 1e6).toFixed(1)} Mo maximum).`);
         const proofFilename = String(proofFile.name || 'proof_address').slice(0, 200);
         const proofExt = (proofFilename.split('.').pop() || '').toLowerCase();
         if (!KYC_ALLOWED_EXT.includes(proofExt)) throw new HttpError(415, 'Justificatif de domicile : formats acceptés PDF, JPG, PNG.');

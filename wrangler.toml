@@ -12,12 +12,15 @@ binding = "AUDITORIA_DB"
 database_name = "auditoria_db"
 database_id = "067dfe5b-d3f0-4092-8e48-ad44551297de"
 
-# R2 désactivé pour l'instant : son activation exige une carte bancaire/PayPal chez Cloudflare,
-# même pour rester dans le tier gratuit. Les fichiers sont stockés directement en D1 en attendant
-# (colonne documents.content_base64). Pour réactiver R2 plus tard :
-# [[r2_buckets]]
-# binding = "AUDITORIA_BUCKET"
-# bucket_name = "auditoria-documents"        # `wrangler r2 bucket create auditoria-documents`
+# R2 : stockage des fichiers de plus de ~1,4 Mo (au-delà, D1 refuserait la ligne — voir README,
+# section "Fichiers volumineux (R2)"). Les petits fichiers restent en D1 comme avant, inchangé.
+# Avant de déployer : crée le bucket une fois (`wrangler r2 bucket create auditoria-documents`),
+# ce qui exige une carte bancaire/PayPal sur le compte Cloudflare, même pour rester dans le tier
+# gratuit de R2. Tant que le bucket n'existe pas, le code refuse proprement les fichiers trop gros
+# (message clair), sans casser le reste du site.
+[[r2_buckets]]
+binding = "AUDITORIA_BUCKET"
+bucket_name = "auditoria-documents"
 
 # Logs du Worker visibles dans le dashboard Cloudflare (les erreurs détaillées y sont écrites,
 # elles ne sont plus renvoyées au navigateur).
